@@ -1,0 +1,141 @@
+name: Compile et publie les PDF (workflow réutilisable)
+
+# Reusable workflow (workflow_call) : factorise la partie de pipeline
+# strictement identique entre tous les dépôts de supports pédagogiques
+# UPSTI (checkout, installation d'UPSTI, gitinfo2, publication GitHub
+# Pages). Chaque dépôt appelant garde son propre scripts/build_pdfs.sh
+# (et gen_index.py) car la logique de sélection/classement des documents
+# y est spécifique.
+#
+# Usage minimal dans le dépôt appelant
+# (.github/workflows/build-pdfs.yml) :
+#
+#   name: Compile et publie les PDF
+#   on:
+#     push:
+#       branches: [main, master]
+#     workflow_dispatch: {}
+#   jobs:
+#     publish:
+#       uses: IUT-GEII-Annecy/ci-latex-upsti/.github/workflows/build-pdfs.yml@main
+#       secrets: inherit
+#
+# Secret requis côté dépôt appelant (Settings > Secrets and variables >
+# Actions) : UPSTI_DEPLOY_KEY (clé de déploiement en lecture vers le
+# dépôt privé GeoffreyV/UPSTI). "secrets: inherit" le transmet
+# automatiquement, aucune déclaration supplémentaire n'est nécessaire
+# côté appelant.
+#
+# Prérequis GitHub une fois par dépôt appelant :
+#   - Settings > Pages > Source = "GitHub Actions"
+#   - Le package ghcr.io/iut-geii-annecy/texlive-upsti doit autoriser ce
+#     dépôt (Manage Actions access sur la page du package), ou être public.
+
+on:
+  workflow_call:
+    inputs:
+      build-script:
+        description: "Chemin (dans le dépôt appelant) du script qui compile les PDF publiables"
+        type: string
+        default: scripts/build_pdfs.sh
+      site-dir:
+        description: "Dossier de sortie contenant le site à publier sur Pages"
+        type: string
+        default: _site
+      texlive-image:
+        description: "Image Docker TeX Live/UPSTI à utiliser pour la compilation"
+        type: string
+        default: ghcr.io/iut-geii-annecy/texlive-upsti:latest
+      fetch-depth:
+        description: "Profondeur d'historique récupérée (utile pour dater les documents via git log)"
+        type: number
+        default: 100
+    secrets:
+      UPSTI_DEPLOY_KEY:
+        description: "Clé de déploiement (lecture) vers le dépôt privé GeoffreyV/UPSTI"
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.texlive-image }}
+    steps:
+      - name: Checkout du dépôt appelant
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Générer les métadonnées gitinfo2 (.git/gitHeadInfo.gin)
+        # gitinfo2 obtient normalement ces métadonnées via un hook git
+        # local (post-commit/post-checkout/post-merge, installé
+        # manuellement dans .git/hooks/ -- non versionné par git, donc
+        # absent après un clone frais comme celui d'actions/checkout).
+        # On reproduit ici exactement la même commande que le hook
+        # (post-xxx-sample.txt du paquet gitinfo2).
+        run: |
+          FIRSTTAG=$(git describe --tags --always --dirty='-*' 2>/dev/null)
+          RELTAG=$(git describe --tags --long --always --dirty='-*' --match '[0-9]*.*' 2>/dev/null)
+          git --no-pager log -1 --date=short --decorate=short \
+            --pretty=format:"\usepackage[%
+        shash={%h},
+        lhash={%H},
+        authname={%an},
+        authemail={%ae},
+        authsdate={%ad},
+        authidate={%ai},
+        authudate={%at},
+        commname={%cn},
+        commemail={%ce},
+        commsdate={%cd},
+        commidate={%ci},
+        commudate={%ct},
+        refnames={%d},
+        firsttagdescribe={$FIRSTTAG},
+        reltag={$RELTAG}
+    ]{gitexinfo}" HEAD > .git/gitHeadInfo.gin
+
+      - name: Checkout du package LaTeX UPSTI (privé)
+        uses: actions/checkout@v4
+        with:
+          repository: GeoffreyV/UPSTI
+          ssh-key: ${{ secrets.UPSTI_DEPLOY_KEY }}
+          path: _upsti-src
+
+      - name: Installer UPSTI dans l'arborescence TEXMF personnelle
+        run: |
+          mkdir -p "$HOME/texmf/tex/latex"
+          cp -r _upsti-src "$HOME/texmf/tex/latex/UPSTI"
+          rm -rf _upsti-src
+
+      - name: Indexer UPSTI dans TeX Live (texhash)
+        run: texhash "$HOME/texmf"
+
+      - name: Compiler les documents publiables
+        run: bash "${{ inputs.build-script }}" "${{ inputs.site-dir }}"
+
+      - name: Upload de l'artefact Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.site-dir }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Déploiement sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
