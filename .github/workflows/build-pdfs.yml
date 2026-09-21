@@ -1,11 +1,13 @@
 name: Compile et publie les PDF (workflow réutilisable)
 
-# Reusable workflow (workflow_call) : factorise la partie de pipeline
-# strictement identique entre tous les dépôts de supports pédagogiques
-# UPSTI (checkout, installation d'UPSTI, gitinfo2, publication GitHub
-# Pages). Chaque dépôt appelant garde son propre scripts/build_pdfs.sh
-# (et gen_index.py) car la logique de sélection/classement des documents
-# y est spécifique.
+# Reusable workflow (workflow_call) : factorise TOUT le pipeline de
+# compilation/publication (checkout, installation d'UPSTI, gitinfo2,
+# compilation, index HTML, publication GitHub Pages), y compris les
+# scripts scripts/build_pdfs.sh et scripts/gen_index.py de CE dépôt
+# (checkoutés dans le job appelant, voir plus bas) : aucun dépôt appelant
+# n'a besoin de garder sa propre copie de ces scripts. Ce qui varie d'un
+# dépôt à l'autre (exclusions, titre du site, mode de classement) se
+# déclare via les inputs ci-dessous, pas par une copie modifiée.
 #
 # Usage minimal dans le dépôt appelant
 # (.github/workflows/build-pdfs.yml) :
@@ -18,6 +20,13 @@ name: Compile et publie les PDF (workflow réutilisable)
 #   jobs:
 #     publish:
 #       uses: IUT-GEII-Annecy/ci-latex-upsti/.github/workflows/build-pdfs.yml@main
+#       with:
+#         site-title: "Supports Informatique - BUT GEII"
+#         site-subtitle: "Tous les supports de cours, TD et TP pour le cours d'informatique Semestre 1 - GEII IUT Annecy"
+#         group-label: "Séquence"
+#         classify-mode: folder   # ou "documentclass" (défaut)
+#         exclude-patterns: |
+#           /Evaluations/
 #       secrets: inherit
 #
 # Secret requis côté dépôt appelant (Settings > Secrets and variables >
@@ -30,14 +39,15 @@ name: Compile et publie les PDF (workflow réutilisable)
 #   - Settings > Pages > Source = "GitHub Actions"
 #   - Le package ghcr.io/iut-geii-annecy/texlive-upsti doit autoriser ce
 #     dépôt (Manage Actions access sur la page du package), ou être public.
+#
+# Voir scripts/gen_index.py (docstring) pour le détail des deux modes de
+# classement ("documentclass" / "folder") et scripts/build_pdfs.sh pour
+# le format de "exclude-patterns" (un motif grep -E par ligne, appliqué
+# en plus des exclusions communes .eval/.hide/.old).
 
 on:
   workflow_call:
     inputs:
-      build-script:
-        description: "Chemin (dans le dépôt appelant) du script qui compile les PDF publiables"
-        type: string
-        default: scripts/build_pdfs.sh
       site-dir:
         description: "Dossier de sortie contenant le site à publier sur Pages"
         type: string
@@ -50,6 +60,30 @@ on:
         description: "Profondeur d'historique récupérée (utile pour dater les documents via git log)"
         type: number
         default: 100
+      exclude-patterns:
+        description: "Motifs grep -E supplémentaires (un par ligne) de chemins à ne jamais publier, en plus de .eval/.hide/.old"
+        type: string
+        default: ""
+      site-title:
+        description: "Titre du site (balise <title> et <h1>)"
+        type: string
+        default: "Supports pédagogiques - BUT GEII"
+      site-subtitle:
+        description: "Sous-titre affiché sous le titre"
+        type: string
+        default: "Tous les supports de cours, TD et TP - GEII IUT Annecy"
+      group-label:
+        description: "Intitulé de la colonne de regroupement du tableau (ex. \"Séquence\" ou \"Module\")"
+        type: string
+        default: "Séquence"
+      classify-mode:
+        description: "\"documentclass\" (classement par option de \\documentclass, regroupement par dossier de premier niveau) ou \"folder\" (classement par nom de dossier td*/tp*/c\\d, regroupement par second segment du chemin)"
+        type: string
+        default: documentclass
+      ci-repo-ref:
+        description: "Réf (branche/tag/sha) de ce dépôt à checkouter pour récupérer les scripts -- utile pour figer une version au lieu de @main"
+        type: string
+        default: main
     secrets:
       UPSTI_DEPLOY_KEY:
         description: "Clé de déploiement (lecture) vers le dépôt privé GeoffreyV/UPSTI"
@@ -130,8 +164,21 @@ jobs:
       - name: Indexer UPSTI dans TeX Live (texhash)
         run: texhash "$HOME/texmf"
 
+      - name: Checkout des scripts communs (ci-latex-upsti)
+        uses: actions/checkout@v4
+        with:
+          repository: IUT-GEII-Annecy/ci-latex-upsti
+          ref: ${{ inputs.ci-repo-ref }}
+          path: _ci-common
+
       - name: Compiler les documents publiables
-        run: bash "${{ inputs.build-script }}" "${{ inputs.site-dir }}"
+        env:
+          CI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
+          SITE_TITLE: ${{ inputs.site-title }}
+          SITE_SUBTITLE: ${{ inputs.site-subtitle }}
+          GROUP_LABEL: ${{ inputs.group-label }}
+          CLASSIFY_MODE: ${{ inputs.classify-mode }}
+        run: bash _ci-common/scripts/build_pdfs.sh "${{ inputs.site-dir }}"
 
       - name: Upload de l'artefact Pages
         uses: actions/upload-pages-artifact@v3
