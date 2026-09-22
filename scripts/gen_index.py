@@ -63,6 +63,11 @@ PDF_ICON = """<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 <text x="12" y="16.5" font-size="6.2" font-family="system-ui, sans-serif" font-weight="700" text-anchor="middle" fill="currentColor">PDF</text>
 </svg>"""
 
+CHECK_ICON = """<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" class="pdf-icon">
+<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+<path d="M8 12.5l2.5 2.5L16 9.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>"""
+
 
 def group_folder(doc_path: str) -> str:
     """Dossier de regroupement (mode "documentclass") : premier segment du chemin."""
@@ -188,23 +193,31 @@ def cell_html(entries):
 
 def cat_list_html(cat_label, entries):
     """Bloc titré (Cours/TD/TP) listant ses documents ; rien si vide.
-    La correction d'un document, si elle existe, s'affiche juste à côté
-    de son lien plutôt que dans une catégorie séparée."""
+    Chaque document affiche son titre, puis deux liens "Sujet" / "Corrigé"
+    (ce dernier seulement s'il existe, voir marqueur .corrige) plutôt
+    qu'une catégorie "Correction" séparée. La date de dernière mise à jour
+    (git) est portée en infobulle (title=...) sur chaque lien, pas affichée
+    en texte : elle reste consultable sans alourdir la liste."""
     if not entries:
         return ""
     items = []
     for label, rel, date, corrige_rel in sorted(entries, key=lambda e: e[:3]):
-        date_html = f' <span class="date">{html.escape(date)}</span>' if date else ""
-        corrige_html = (
-            f' <a class="pdf-link corrige-link" href="{html.escape(corrige_rel)}">{PDF_ICON}'
-            f'<span class="label">corrigé</span></a>'
-            if corrige_rel else ""
-        )
-        items.append(
-            f'            <li><a class="pdf-link" href="{html.escape(rel)}">{PDF_ICON}'
-            f'<span class="label">{html.escape(label)}</span></a>'
-            f'{corrige_html}{date_html}</li>'
-        )
+        sujet_title = f' title="Mis à jour le {html.escape(date)}"' if date else ""
+        corrige_html = ""
+        if corrige_rel:
+            corrige_title = f' title="Corrigé mis à jour le {html.escape(date)}"' if date else ""
+            corrige_html = (
+                f'<span class="sep">·</span>'
+                f'<a class="doc-corrige" href="{html.escape(corrige_rel)}"{corrige_title}>'
+                f'{CHECK_ICON}<span class="label">Corrigé</span></a>'
+            )
+        items.append(f"""            <li>
+              <p class="doc-title">{html.escape(label)}</p>
+              <div class="doc-actions">
+                <a class="doc-sujet" href="{html.escape(rel)}"{sujet_title}>{PDF_ICON}<span class="label">Sujet</span></a>
+                {corrige_html}
+              </div>
+            </li>""")
     items_html = "\n".join(items)
     return f"""
         <div class="cat">
@@ -275,6 +288,10 @@ page = f"""<!doctype html>
     --link-hover: #7c0c12;
     --empty: #cccccc;
     --failed-fg: #a33333;
+    --sujet: #1a7a4c;
+    --sujet-hover: #135c39;
+    --corrige: #b3121b;
+    --corrige-hover: #7c0c12;
   }}
   @media (prefers-color-scheme: dark) {{
     :root:not([data-theme="light"]) {{
@@ -287,6 +304,10 @@ page = f"""<!doctype html>
       --link-hover: #ffb3ab;
       --empty: #4a4d53;
       --failed-fg: #ff8a80;
+      --sujet: #6cd9a0;
+      --sujet-hover: #93e6ba;
+      --corrige: #ff8a80;
+      --corrige-hover: #ffb3ab;
     }}
   }}
   :root[data-theme="dark"] {{
@@ -299,6 +320,10 @@ page = f"""<!doctype html>
     --link-hover: #ffb3ab;
     --empty: #4a4d53;
     --failed-fg: #ff8a80;
+    --sujet: #6cd9a0;
+    --sujet-hover: #93e6ba;
+    --corrige: #ff8a80;
+    --corrige-hover: #ffb3ab;
   }}
   body {{
     font-family: system-ui, sans-serif;
@@ -342,14 +367,20 @@ page = f"""<!doctype html>
   .cat {{ min-width: 12rem; }}
   .cat h3 {{ margin: 0 0 0.4rem; font-size: 0.95em; color: var(--muted); }}
   .cat ul {{ margin: 0; padding: 0; list-style: none; }}
-  .cat li {{ margin: 0 0 0.5rem; }}
+  .cat li {{ margin: 0 0 0.9rem; }}
   .pdf-link {{ display: inline-flex; align-items: center; gap: 0.35rem; color: var(--link); text-decoration: none; }}
   .pdf-link:hover {{ color: var(--link-hover); text-decoration: underline; }}
   .pdf-icon {{ flex: none; }}
-  .corrige-link {{ font-size: 0.85em; color: var(--muted); }}
-  .corrige-link:hover {{ color: var(--link-hover); }}
-  .corrige-link .pdf-icon {{ width: 14px; height: 14px; }}
   .date {{ display: block; margin: 0.1rem 0 0.4rem 1.5rem; color: var(--muted); font-size: 0.8em; }}
+  .doc-title {{ margin: 0 0 0.35rem; font-size: 0.92em; font-weight: 600; }}
+  .doc-actions {{ display: flex; align-items: center; gap: 0.5rem; }}
+  .doc-actions a {{ display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 700; font-size: 0.9em; text-decoration: none; }}
+  .doc-actions a:hover {{ text-decoration: underline; }}
+  .doc-sujet {{ color: var(--sujet); }}
+  .doc-sujet:hover {{ color: var(--sujet-hover); }}
+  .doc-corrige {{ color: var(--corrige); }}
+  .doc-corrige:hover {{ color: var(--corrige-hover); }}
+  .sep {{ color: var(--border); }}
   .empty {{ color: var(--empty); }}
   section {{ margin-bottom: 1.5rem; }}
   h2 {{ border-bottom: 1px solid var(--border); padding-bottom: 0.2rem; }}
