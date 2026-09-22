@@ -78,6 +78,20 @@ def group_sequence_folder(doc_path: str) -> str:
     return parts[1] if len(parts) > 2 else parts[0]
 
 
+def group_dir_folder(doc_path: str) -> str:
+    """Chemin (relatif à la racine du dépôt) du dossier de regroupement
+    (mode "documentclass") : identique à group_folder, déjà un chemin complet."""
+    return group_folder(doc_path)
+
+
+def group_dir_sequence_folder(doc_path: str) -> str:
+    """Chemin (relatif à la racine du dépôt) du dossier de regroupement
+    (mode "folder") : les deux premiers segments du chemin, ex.
+    "S1_Initiation_programmation_langageC/Seq01_Hello-world"."""
+    parts = [p for p in Path(doc_path).parts if p != "."]
+    return str(Path(*parts[:2])) if len(parts) > 2 else group_sequence_folder(doc_path)
+
+
 def category_from_documentclass(doc_path: str) -> str:
     """Classe un document en Cours / TD / TP à partir de l'option de \\documentclass."""
     try:
@@ -113,9 +127,11 @@ def category_from_folder(doc_path: str) -> str:
 
 if CLASSIFY_MODE == "folder":
     group_of = group_sequence_folder
+    group_dir_of = group_dir_sequence_folder
     category_of = category_from_folder
 else:
     group_of = group_folder
+    group_dir_of = group_dir_folder
     category_of = category_from_documentclass
 
 
@@ -132,11 +148,13 @@ def version_date(doc_path: str) -> str:
         return ""
 
 
-rows = defaultdict(lambda: defaultdict(list))  # rows[groupe][catégorie] = [(label, rel_pdf, date), ...]
+rows = defaultdict(lambda: defaultdict(list))  # rows[groupe][catégorie] = [(label, rel_pdf, date, corrige_rel), ...]
 autres = defaultdict(list)
+group_dirs = {}  # grp -> chemin du dossier de regroupement (pour le marqueur .active)
 
 for doc, rel in built:
     grp = group_of(doc)
+    group_dirs.setdefault(grp, group_dir_of(doc))
     cat = category_of(doc)
     # Le libellé affiché reprend le nom réel du PDF (celui décidé par
     # build_pdfs.sh à partir de \sequence/du type de document), pas le nom
@@ -144,13 +162,15 @@ for doc, rel in built:
     # le fichier téléchargé, lui, a le bon nom.
     label = Path(rel).stem
     date = version_date(doc)
+    corrige_rel = corriges.get(doc)
     if cat == "Autre":
         autres[grp].append((label, rel, date))
     else:
-        rows[grp][cat].append((label, rel, date))
-
-    if doc in corriges:
-        rows[grp]["Correction"].append((f"{label} (corrigé)", corriges[doc], date))
+        # La correction (si disponible, voir marqueur .corrige) est
+        # attachée au même document plutôt que listée à part : elle
+        # s'affiche juste à côté de son TD/TP/Cours, pas dans une
+        # catégorie "Correction" séparée qu'il faudrait aller chercher.
+        rows[grp][cat].append((label, rel, date, corrige_rel))
 
 
 def cell_html(entries):
@@ -166,20 +186,52 @@ def cell_html(entries):
     return "<br>".join(parts)
 
 
-table_rows = []
+def cat_list_html(cat_label, entries):
+    """Bloc titré (Cours/TD/TP) listant ses documents ; rien si vide.
+    La correction d'un document, si elle existe, s'affiche juste à côté
+    de son lien plutôt que dans une catégorie séparée."""
+    if not entries:
+        return ""
+    items = []
+    for label, rel, date, corrige_rel in sorted(entries, key=lambda e: e[:3]):
+        date_html = f' <span class="date">{html.escape(date)}</span>' if date else ""
+        corrige_html = (
+            f' <a class="pdf-link corrige-link" href="{html.escape(corrige_rel)}">{PDF_ICON}'
+            f'<span class="label">corrigé</span></a>'
+            if corrige_rel else ""
+        )
+        items.append(
+            f'            <li><a class="pdf-link" href="{html.escape(rel)}">{PDF_ICON}'
+            f'<span class="label">{html.escape(label)}</span></a>'
+            f'{corrige_html}{date_html}</li>'
+        )
+    items_html = "\n".join(items)
+    return f"""
+        <div class="cat">
+          <h3>{html.escape(cat_label)}</h3>
+          <ul>
+{items_html}
+          </ul>
+        </div>"""
+
+
+sequence_blocks = []
 for grp in sorted(rows):
-    cours = cell_html(rows[grp].get("Cours", []))
-    td = cell_html(rows[grp].get("TD", []))
-    tp = cell_html(rows[grp].get("TP", []))
-    correction = cell_html(rows[grp].get("Correction", []))
-    table_rows.append(f"""
-      <tr>
-        <th scope="row">{html.escape(grp)}</th>
-        <td>{cours}</td>
-        <td>{td}</td>
-        <td>{tp}</td>
-        <td>{correction}</td>
-      </tr>""")
+    cats_html = "".join(
+        cat_list_html(cat, rows[grp].get(cat, []))
+        for cat in ("Cours", "TD", "TP")
+    )
+    # Une séquence s'ouvre par défaut si un marqueur .active a été déposé
+    # dans son dossier (git add .active && git commit && git push), sans
+    # modifier aucun document LaTeX.
+    is_active = Path(group_dirs[grp], ".active").exists()
+    open_attr = " open" if is_active else ""
+    sequence_blocks.append(f"""
+    <details class="seq"{open_attr}>
+      <summary>{html.escape(GROUP_LABEL)} : {html.escape(grp)}</summary>
+      <div class="cat-list">{cats_html}
+      </div>
+    </details>""")
 
 autres_html = ""
 if autres:
@@ -258,16 +310,45 @@ page = f"""<!doctype html>
   }}
   h1 {{ margin-bottom: 0.2rem; }}
   .subtitle {{ color: var(--muted); margin-top: 0; }}
-  .table-wrap {{ overflow-x: auto; }}
-  table {{ border-collapse: collapse; width: 100%; margin-bottom: 2rem; }}
-  caption {{ caption-side: top; text-align: left; font-weight: 600; margin-bottom: 0.5rem; }}
-  th, td {{ border: 1px solid var(--border); padding: 0.6rem 0.8rem; text-align: left; vertical-align: top; }}
-  thead th {{ background: var(--row-alt); }}
-  tbody th {{ white-space: nowrap; }}
-  tbody tr:nth-child(even) {{ background: var(--row-alt); }}
+  .sequences {{ margin-bottom: 2rem; }}
+  details.seq {{
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 0.6rem;
+    overflow: hidden;
+  }}
+  details.seq summary {{
+    cursor: pointer;
+    padding: 0.7rem 1rem;
+    font-weight: 600;
+    background: var(--row-alt);
+    list-style: none;
+  }}
+  details.seq summary::-webkit-details-marker {{ display: none; }}
+  details.seq summary::before {{
+    content: "▸";
+    display: inline-block;
+    width: 1em;
+    color: var(--muted);
+  }}
+  details.seq[open] summary::before {{ content: "▾"; }}
+  details.seq summary:hover {{ color: var(--link); }}
+  .cat-list {{
+    padding: 0.8rem 1rem 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+  }}
+  .cat {{ min-width: 12rem; }}
+  .cat h3 {{ margin: 0 0 0.4rem; font-size: 0.95em; color: var(--muted); }}
+  .cat ul {{ margin: 0; padding: 0; list-style: none; }}
+  .cat li {{ margin: 0 0 0.5rem; }}
   .pdf-link {{ display: inline-flex; align-items: center; gap: 0.35rem; color: var(--link); text-decoration: none; }}
   .pdf-link:hover {{ color: var(--link-hover); text-decoration: underline; }}
   .pdf-icon {{ flex: none; }}
+  .corrige-link {{ font-size: 0.85em; color: var(--muted); }}
+  .corrige-link:hover {{ color: var(--link-hover); }}
+  .corrige-link .pdf-icon {{ width: 14px; height: 14px; }}
   .date {{ display: block; margin: 0.1rem 0 0.4rem 1.5rem; color: var(--muted); font-size: 0.8em; }}
   .empty {{ color: var(--empty); }}
   section {{ margin-bottom: 1.5rem; }}
@@ -282,15 +363,7 @@ page = f"""<!doctype html>
 <body>
   <h1>{html.escape(SITE_TITLE)}</h1>
   <p class="subtitle">{html.escape(SITE_SUBTITLE)}</p>
-  <div class="table-wrap">
-    <table>
-      <caption>Tableau des supports</caption>
-      <thead>
-        <tr><th scope="col">{html.escape(GROUP_LABEL)}</th><th scope="col">Cours</th><th scope="col">TD</th><th scope="col">TP</th><th scope="col">Correction</th></tr>
-      </thead>
-      <tbody>{''.join(table_rows)}
-      </tbody>
-    </table>
+  <div class="sequences">{''.join(sequence_blocks)}
   </div>
 {autres_html}
 {failed_html}
