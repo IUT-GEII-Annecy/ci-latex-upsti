@@ -223,11 +223,12 @@ def version_date(doc_path: str) -> str:
         return ""
 
 
-# rows[groupe][catégorie] = [entry, ...] -- page publique
-# prof_rows : même structure, mais uniquement les entrées ayant un aperçu
-# enseignant (corrige_prof/solution_prof) pas encore public -- page à part.
+# rows[groupe][catégorie] = [entry, ...] -- sert à la fois à la page
+# publique et à la page prof-preview (celle-ci affiche TOUS les documents,
+# comme la page publique, plus les corrigé_prof/solution_prof en aperçu
+# quand ils existent -- voir cat_list_html(prof=True) plus bas, pas de
+# structure séparée nécessaire).
 rows = defaultdict(lambda: defaultdict(list))
-prof_rows = defaultdict(lambda: defaultdict(list))
 autres = defaultdict(list)
 group_dirs = {}  # grp -> chemin du dossier de regroupement (pour les marqueurs .active/.corrige-prof)
 
@@ -259,8 +260,6 @@ for doc, rel in built:
         "squelette_url": squelette_urls.get(doc),
     }
     rows[grp][cat].append(entry)
-    if entry["corrige_prof"] or entry["solution_prof"]:
-        prof_rows[grp][cat].append(entry)
 
 
 def cell_html(entries):
@@ -321,17 +320,22 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
     :param prefix: préfixe ajouté devant chaque href (ex. "../" depuis
       prof-preview/index.html, dont les chemins stockés sont relatifs à la
       racine du site).
-    :param prof: si True, affiche les liens/commandes d'aperçu enseignant
-      (corrige_prof/solution_prof) au lieu des publics -- jamais les deux
-      à la fois. Le script de démarrage, toujours public, est inchangé.
+    :param prof: si True (page prof-preview), affiche les mêmes documents
+      que la page publique -- PLUS, quand ils existent, les corrige_prof/
+      solution_prof pas encore publics (préférés au public si les deux
+      existaient, mais .corrige-prof/.solution-prof sont de toute façon
+      ignorés par build_pdfs.sh dès que leur équivalent public existe :
+      jamais les deux en même temps pour un même document).
     """
     if not entries:
         return ""
     items = []
     for e in sorted(entries, key=lambda e: (e["label"], e["rel"])):
         sujet_title = f' title="Mis à jour le {html.escape(e["date"])}"' if e["date"] else ""
-        corrige_rel = e["corrige_prof"] if prof else e["corrige"]
-        solution_rel = e["solution_prof"] if prof else e["solution"]
+        corrige_rel = (e["corrige_prof"] or e["corrige"]) if prof else e["corrige"]
+        solution_rel = (e["solution_prof"] or e["solution"]) if prof else e["solution"]
+        corrige_is_preview = prof and bool(e["corrige_prof"])
+        solution_is_preview = prof and bool(e["solution_prof"])
 
         demarrage_html = ""
         if e["squelette_url"]:
@@ -350,7 +354,7 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
 
         corrige_html = ""
         if corrige_rel:
-            corrige_label = "Corrigé (aperçu)" if prof else "Corrigé"
+            corrige_label = "Corrigé (aperçu)" if corrige_is_preview else "Corrigé"
             corrige_title = (
                 f' title="Corrigé mis à jour le {html.escape(e["date"])}"' if e["date"] else ""
             )
@@ -363,9 +367,10 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
         solution_html = ""
         if solution_rel:
             solution_url = abs_url(solution_rel)
+            solution_label = "solution (aperçu)" if solution_is_preview else "solution"
             solution_html = (
                 f'<span class="sep">·</span>'
-                + copy_button_html("solution", f"wget {solution_url}", solution_url)
+                + copy_button_html(solution_label, f"wget {solution_url}", solution_url)
             )
 
         items.append(f"""            <li>
@@ -387,7 +392,7 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
         </div>"""
 
 
-def build_sequence_blocks(source_rows, prefix="", prof=False, force_open=False):
+def build_sequence_blocks(source_rows, prefix="", prof=False, force_open_groups=frozenset()):
     blocks = []
     for grp in sorted(source_rows):
         cats_html = "".join(
@@ -396,10 +401,11 @@ def build_sequence_blocks(source_rows, prefix="", prof=False, force_open=False):
         )
         # Une séquence s'ouvre par défaut si un marqueur .active a été
         # déposé dans son dossier (git add .active && commit && push),
-        # sans modifier aucun document LaTeX. La page d'aperçu enseignant
-        # est courte et consultée ponctuellement : ses séquences restent
-        # toujours dépliées, marqueur .active ou non.
-        is_active = force_open or Path(group_dirs[grp], ".active").exists()
+        # sans modifier aucun document LaTeX -- ou, sur la page
+        # prof-preview, si elle contient au moins un aperçu (corrige_prof/
+        # solution_prof) : ce qui reste à relire avant publication doit
+        # sauter aux yeux sans avoir à tout déplier soi-même.
+        is_active = grp in force_open_groups or Path(group_dirs[grp], ".active").exists()
         open_attr = " open" if is_active else ""
         blocks.append(f"""
     <details class="seq"{open_attr}>
@@ -420,11 +426,27 @@ def has_wget(source_rows) -> bool:
     )
 
 
+def groups_with_preview(source_rows) -> set:
+    """Séquences contenant au moins une entrée en aperçu enseignant
+    (corrige_prof/solution_prof) -- dépliées par défaut sur la page
+    prof-preview pour qu'elles sautent aux yeux."""
+    return {
+        grp for grp in source_rows for cat in source_rows[grp] for e in source_rows[grp][cat]
+        if e["corrige_prof"] or e["solution_prof"]
+    }
+
+
 sequence_blocks = build_sequence_blocks(rows)
-prof_sequence_blocks = build_sequence_blocks(prof_rows, prefix="../", prof=True, force_open=True)
+# La page prof-preview affiche TOUS les documents (comme la page publique),
+# pas seulement ceux ayant un aperçu -- voir cat_list_html(prof=True), qui
+# bascule sur corrige_prof/solution_prof quand ils existent et retombe sur
+# le public sinon.
+prof_sequence_blocks = build_sequence_blocks(
+    rows, prefix="../", prof=True, force_open_groups=groups_with_preview(rows)
+)
 
 wget_note_html = ""
-if has_wget(rows) or has_wget(prof_rows):
+if has_wget(rows):
     wget_note_html = """
   <div class="site-note">
     <span aria-hidden="true">💡</span>
@@ -747,13 +769,15 @@ page = render_page(
 (out_dir / "index.html").write_text(page, encoding="utf-8")
 
 prof_page_written = False
-if prof_rows:
+if rows:
     prof_banner = """  <div class="banner">
     <span aria-hidden="true">🔒</span>
     <div>
       <strong>Aperçu enseignant</strong>
-      Corrections/solutions pas encore publiées aux étudiants (marqueurs
-      .corrige-prof / .solution-prof). Cette page n'est pas un vrai
+      Reprend tous les documents de la page publique, complétés par les
+      corrections/solutions pas encore publiées aux étudiants (marqueurs
+      .corrige-prof / .solution-prof, repérables au libellé « (aperçu) » et
+      aux séquences dépliées automatiquement). Cette page n'est pas un vrai
       contrôle d'accès : quiconque a le lien peut la consulter -- ne pas
       le partager, ne pas le publier ailleurs.
     </div>
@@ -761,7 +785,7 @@ if prof_rows:
 """
     prof_page = render_page(
         f"{SITE_TITLE} — Aperçu enseignant",
-        "Corrections et solutions pas encore publiées aux étudiants.",
+        "Tous les documents, y compris corrections et solutions pas encore publiées aux étudiants.",
         prof_sequence_blocks,
         banner_html=prof_banner,
         note_html=wget_note_html,
