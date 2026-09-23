@@ -45,6 +45,54 @@ SOLUTIONS_SRC="${SOLUTIONS_SRC:-_solutions-src}"
 # .solution/.solution-prof sont ignorés même s'ils sont présents.
 ENABLE_TP_DOWNLOADS="${ENABLE_TP_DOWNLOADS:-false}"
 
+# --- Compilation incrémentale ------------------------------------------
+# Évite de recompiler un document si aucun commit ne l'a touché depuis la
+# dernière fois qu'il a été compilé avec succès. La comparaison se fait
+# EXCLUSIVEMENT sur le hash du dernier commit ayant touché son dossier
+# (git log -1 --format=%H -- <dossier>), jamais sur une date : un commit
+# rejoué/importé peut porter une date ancienne, un rebase peut changer des
+# dates sans changer le contenu -- seul le hash du commit qui a réellement
+# touché ce chemin en dernier fait foi.
+#
+# Persisté entre les runs via un cache GitHub Actions (voir build-pdfs.yml)
+# monté sur $CACHE_DIR ; absent au premier run ou si non restauré, tout est
+# simplement recompilé (fail-open vers la correction, jamais vers la
+# vitesse). Invalidé EN BLOC (tous les documents recompilés) si une
+# dépendance partagée a changé : le paquet UPSTI, les scripts
+# ci-latex-upsti eux-mêmes, ou tout fichier preamble*.tex/*.cls/*.sty du
+# dépôt -- inclus par plusieurs documents via \input, donc jamais détecté
+# par un "git log" scopé au dossier d'UN SEUL document.
+CACHE_DIR="${BUILD_CACHE_DIR:-.build-cache}"
+INCREMENTAL_BUILD="${INCREMENTAL_BUILD:-true}"
+FORCE_FULL_REBUILD="${FORCE_FULL_REBUILD:-false}"
+mkdir -p "$CACHE_DIR/by-dir"
+CACHE_HITS=0
+
+global_deps_hash() {
+  {
+    echo "upsti:${UPSTI_SHA:-}"
+    echo "ci-common:${CI_COMMON_SHA:-}"
+    find . -type f \( -name 'preamble*.tex' -o -name '*.cls' -o -name '*.sty' \) \
+      -not -path "./$CACHE_DIR/*" -print0 2>/dev/null \
+      | sort -z \
+      | xargs -0 -I{} git log -1 --format='%H {}' -- {}
+  } | sha256sum | cut -d' ' -f1
+}
+
+GLOBAL_DEPS_HASH=$(global_deps_hash)
+CACHE_USABLE=false
+if [ "$INCREMENTAL_BUILD" = "true" ] && [ "$FORCE_FULL_REBUILD" != "true" ]; then
+  PREV_GLOBAL_DEPS_HASH=$(cat "$CACHE_DIR/global-deps.sha256" 2>/dev/null || true)
+  if [ -n "$PREV_GLOBAL_DEPS_HASH" ] && [ "$GLOBAL_DEPS_HASH" = "$PREV_GLOBAL_DEPS_HASH" ]; then
+    CACHE_USABLE=true
+    echo "→ Cache de compilation incrémentale utilisable (dépendances partagées inchangées)"
+  else
+    echo "→ Cache de compilation incrémentale ignoré (absent ou dépendances partagées changées) : recompilation complète"
+  fi
+else
+  echo "→ Compilation incrémentale désactivée (INCREMENTAL_BUILD/FORCE_FULL_REBUILD) : recompilation complète"
+fi
+
 # Métadonnées des documents compilés avec succès, une ligne TSV par
 # document : type \t seqnum \t numnum \t doc \t dir \t base
 # (voir "Numérotation des fichiers publiés" plus bas pour le format final).
@@ -81,19 +129,37 @@ for doc in "${DOCS[@]}"; do
   echo "----------------------------------------"
   echo "Compilation: $doc"
 
-  # Pas de -halt-on-error : on force latexmk à aller jusqu'au bout même en
-  # cas d'erreur récupérable (ex: commande non définie mais non bloquante),
-  # comme le ferait un \scrollmode. Un document publié avec un défaut mineur
-  # vaut mieux qu'un document absent.
-  # NB: latexmk -f pousse jusqu'au bout malgré des erreurs récupérables
-  # (macro non définie, référence non résolue...) et son code de sortie
-  # reste souvent 1 même quand un PDF complet a bien été produit. On juge
-  # donc le succès sur la présence du PDF, pas sur le code de sortie.
-  ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "$base.tex" ) \
-    > /tmp/build_${base}.log 2>&1
-
   pdf_path="$dir/$base.pdf"
+  cache_dir="$CACHE_DIR/by-dir/$dir"
+  # Fingerprint de ce document : hash du dernier commit ayant touché son
+  # dossier (jamais une date, voir commentaire en tête de script).
+  doc_commit=$(git log -1 --format=%H -- "$dir" 2>/dev/null || true)
+
+  if [ "$CACHE_USABLE" = "true" ] && [ -n "$doc_commit" ] \
+     && [ -f "$cache_dir/commit.txt" ] \
+     && [ "$(cat "$cache_dir/commit.txt")" = "$doc_commit" ] \
+     && [ -f "$cache_dir/$base.pdf" ]; then
+    echo "↻ Inchangé depuis $doc_commit -- réutilisation du cache (pas de recompilation)"
+    mkdir -p "$dir"
+    cp "$cache_dir/$base.pdf" "$pdf_path"
+    CACHE_HITS=$((CACHE_HITS + 1))
+  else
+    # Pas de -halt-on-error : on force latexmk à aller jusqu'au bout même en
+    # cas d'erreur récupérable (ex: commande non définie mais non bloquante),
+    # comme le ferait un \scrollmode. Un document publié avec un défaut mineur
+    # vaut mieux qu'un document absent.
+    # NB: latexmk -f pousse jusqu'au bout malgré des erreurs récupérables
+    # (macro non définie, référence non résolue...) et son code de sortie
+    # reste souvent 1 même quand un PDF complet a bien été produit. On juge
+    # donc le succès sur la présence du PDF, pas sur le code de sortie.
+    ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "$base.tex" ) \
+      > /tmp/build_${base}.log 2>&1
+  fi
+
   if [ -f "$pdf_path" ]; then
+    mkdir -p "$cache_dir"
+    cp "$pdf_path" "$cache_dir/$base.pdf"
+    echo "$doc_commit" > "$cache_dir/commit.txt"
     # \sequence est défini dans le preamble.tex le plus proche du document
     # (celui-ci, sinon on remonte les dossiers parents).
     seqnum=""
@@ -208,23 +274,39 @@ for i in "${!COMPILED_META[@]}"; do
   BUILT+=("$doc"$'\t'"$dir/$out_name")
   echo "Publié : $doc -> $dir/$out_name"
 
+  # Recalculés (loop séparée de la compilation : ni cache_dir ni doc_commit
+  # ne survivent d'une itération à l'autre entre les deux boucles).
+  cache_dir="$CACHE_DIR/by-dir/$dir"
+  doc_commit=$(git log -1 --format=%H -- "$dir" 2>/dev/null || true)
+  doc_cache_fresh=false
+  [ "$CACHE_USABLE" = "true" ] && [ -n "$doc_commit" ] \
+    && [ -f "$cache_dir/commit.txt" ] && [ "$(cat "$cache_dir/commit.txt")" = "$doc_commit" ] \
+    && doc_cache_fresh=true
+
   # Correction publique : publiée si un marqueur .corrige a été déposé dans
   # le dossier du document (git add .corrige && git commit && git push).
   # Utilise le mécanisme UPSTI \ChoixDeVersion{P} (voir docs UPSTI), injecté
   # sans modifier le document original.
   if [ -f "$dir/.corrige" ]; then
-    echo "  → marqueur .corrige trouvé, compilation de la version corrigée"
     wrapper="$dir/${base}__corrige.tex"
-    printf '\\def\\ChoixDeVersion{P}\n\\input{%s.tex}\n' "$base" > "$wrapper"
-
-    ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "${base}__corrige.tex" ) \
-      > "/tmp/build_${base}__corrige.log" 2>&1
-
     corrige_pdf="$dir/${base}__corrige.pdf"
+    corrige_cache="$cache_dir/${base}__corrige.pdf"
+
+    if [ "$doc_cache_fresh" = "true" ] && [ -f "$corrige_cache" ]; then
+      echo "  → .corrige inchangé depuis $doc_commit -- réutilisation du cache"
+      cp "$corrige_cache" "$corrige_pdf"
+    else
+      echo "  → marqueur .corrige trouvé, compilation de la version corrigée"
+      printf '\\def\\ChoixDeVersion{P}\n\\input{%s.tex}\n' "$base" > "$wrapper"
+      ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "${base}__corrige.tex" ) \
+        > "/tmp/build_${base}__corrige.log" 2>&1
+    fi
+
     if [ -f "$corrige_pdf" ]; then
       corrige_out_name="${out_base}__corrige.pdf"
       cp "$corrige_pdf" "$dest/$corrige_out_name"
       CORRIGES+=("$doc"$'\t'"$dir/$corrige_out_name")
+      cp "$corrige_pdf" "$corrige_cache"
       echo "  → corrigé OK"
     else
       echo "  → ÉCHEC corrigé (voir /tmp/build_${base}__corrige.log)"
@@ -242,18 +324,25 @@ for i in "${!COMPILED_META[@]}"; do
   # (voir docstring de gen_index.py -- ce n'est pas un vrai contrôle
   # d'accès, seulement un lien non répertorié).
   elif [ -f "$dir/.corrige-prof" ]; then
-    echo "  → marqueur .corrige-prof trouvé (aperçu enseignant), compilation"
     wrapper="$dir/${base}__corrige.tex"
-    printf '\\def\\ChoixDeVersion{P}\n\\input{%s.tex}\n' "$base" > "$wrapper"
-
-    ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "${base}__corrige.tex" ) \
-      > "/tmp/build_${base}__corrige_prof.log" 2>&1
-
     corrige_pdf="$dir/${base}__corrige.pdf"
+    corrige_prof_cache="$cache_dir/${base}__corrige_prof.pdf"
+
+    if [ "$doc_cache_fresh" = "true" ] && [ -f "$corrige_prof_cache" ]; then
+      echo "  → .corrige-prof inchangé depuis $doc_commit -- réutilisation du cache"
+      cp "$corrige_prof_cache" "$corrige_pdf"
+    else
+      echo "  → marqueur .corrige-prof trouvé (aperçu enseignant), compilation"
+      printf '\\def\\ChoixDeVersion{P}\n\\input{%s.tex}\n' "$base" > "$wrapper"
+      ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "${base}__corrige.tex" ) \
+        > "/tmp/build_${base}__corrige_prof.log" 2>&1
+    fi
+
     if [ -f "$corrige_pdf" ]; then
       corrige_prof_out_name="${out_base}__corrige_prof.pdf"
       cp "$corrige_pdf" "$dest/$corrige_prof_out_name"
       PROF_CORRIGES+=("$doc"$'\t'"$dir/$corrige_prof_out_name")
+      cp "$corrige_pdf" "$corrige_prof_cache"
       echo "  → corrigé (aperçu enseignant) OK"
     else
       echo "  → ÉCHEC corrigé aperçu (voir /tmp/build_${base}__corrige_prof.log)"
@@ -319,8 +408,14 @@ shutil.make_archive(base, 'zip', sys.argv[2])
   fi
 done
 
+# Persiste l'empreinte des dépendances partagées pour le run suivant
+# (systématique, que le cache ait servi ou non ce run-ci) -- voir
+# actions/cache dans build-pdfs.yml pour la persistance entre runs.
+echo "$GLOBAL_DEPS_HASH" > "$CACHE_DIR/global-deps.sha256"
+
 echo "========================================"
 echo "Réussis : ${#BUILT[@]}"
+echo "  dont réutilisés depuis le cache (inchangés) : $CACHE_HITS"
 echo "Échoués : ${#FAILED[@]}"
 for f in "${FAILED[@]:-}"; do
   [ -n "$f" ] && echo "  - $f"

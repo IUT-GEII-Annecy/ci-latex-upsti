@@ -120,6 +120,14 @@ on:
         description: "URL publique de base du site (sans / final), nécessaire pour générer une commande wget absolue pour la solution de TP. Vide = calculée automatiquement (https://<owner>.github.io/<repo>) ; à renseigner explicitement seulement avec un domaine personnalisé (CNAME)."
         type: string
         default: ""
+      incremental-build:
+        description: "Ne recompile un document que si un commit a touché son dossier depuis la dernière compilation réussie (comparaison sur le hash du dernier commit, jamais une date -- voir scripts/build_pdfs.sh). Invalidé en bloc si UPSTI, ce dépôt de scripts, ou un fichier preamble*.tex/*.cls/*.sty a changé. Persisté entre runs via actions/cache."
+        type: boolean
+        default: true
+      force-full-rebuild:
+        description: "Ignore le cache de compilation incrémentale pour ce run et recompile tout, sans l'invalider pour les runs suivants. À relier à un input workflow_dispatch côté dépôt appelant pour un déclenchement manuel."
+        type: boolean
+        default: false
     secrets:
       UPSTI_DEPLOY_KEY:
         description: "Clé de déploiement (lecture) vers le dépôt privé GeoffreyV/UPSTI"
@@ -194,6 +202,14 @@ jobs:
           ssh-key: ${{ secrets.UPSTI_DEPLOY_KEY }}
           path: _upsti-src
 
+      - name: Capturer le commit UPSTI (avant nettoyage de _upsti-src)
+        # Sert à invalider en bloc le cache de compilation incrémentale si
+        # UPSTI change (voir scripts/build_pdfs.sh) -- capturé ici car
+        # _upsti-src est supprimé juste après par le step suivant.
+        # safe.directory a déjà été configuré globalement par le step
+        # gitinfo2 ci-dessus, inutile de le refaire.
+        run: echo "UPSTI_SHA=$(git -C _upsti-src rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Installer UPSTI dans l'arborescence TEXMF personnelle
         run: |
           mkdir -p "$HOME/texmf/tex/latex"
@@ -209,6 +225,28 @@ jobs:
           repository: IUT-GEII-Annecy/ci-latex-upsti
           ref: ${{ inputs.ci-repo-ref }}
           path: _ci-common
+
+      - name: Capturer le commit ci-latex-upsti
+        # Même rôle que la capture UPSTI ci-dessus : si les scripts
+        # communs changent, le cache de compilation incrémentale est
+        # invalidé en bloc plutôt que de risquer de publier du contenu
+        # généré par une version obsolète du script.
+        run: echo "CI_COMMON_SHA=$(git -C _ci-common rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Restaurer le cache de compilation incrémentale
+        # Toujours sauvegardé en fin de job sous la clé exacte (incluant
+        # github.sha) si son contenu a changé ; restauré au run suivant via
+        # restore-keys (préfixe) puisque la clé exacte, unique à CE commit,
+        # n'a par construction encore jamais été écrite. build_pdfs.sh
+        # (voir GLOBAL_DEPS_HASH) reste seul juge de ce qui, dans ce cache,
+        # est effectivement réutilisable pour ce run.
+        if: ${{ inputs.incremental-build }}
+        uses: actions/cache@v6
+        with:
+          path: .build-cache
+          key: build-cache-${{ github.sha }}
+          restore-keys: |
+            build-cache-
 
       - name: Checkout du dépôt solutions (optionnel)
         # N'a lieu que si enable-tp-downloads est actif ET solutions-repo
@@ -232,6 +270,10 @@ jobs:
           ENABLE_TP_DOWNLOADS: ${{ inputs.enable-tp-downloads }}
           SOLUTIONS_SRC: _solutions-src
           SITE_BASE_URL: ${{ inputs.site-base-url != '' && inputs.site-base-url || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+          INCREMENTAL_BUILD: ${{ inputs.incremental-build }}
+          FORCE_FULL_REBUILD: ${{ inputs.force-full-rebuild }}
+          UPSTI_SHA: ${{ env.UPSTI_SHA }}
+          CI_COMMON_SHA: ${{ env.CI_COMMON_SHA }}
         run: bash _ci-common/scripts/build_pdfs.sh "${{ inputs.site-dir }}"
 
       - name: Upload de l'artefact Pages

@@ -127,6 +127,30 @@ jobs:
       UPSTI_DEPLOY_KEY: ${{ secrets.UPSTI_DEPLOY_KEY }}
 ```
 
+## Compilation incrémentale
+
+Activée par défaut (input `incremental-build`, `true`) : un document n'est
+recompilé que si un commit a touché son dossier depuis la dernière
+compilation réussie mise en cache. La comparaison se fait **exclusivement
+sur le hash du dernier commit** touchant ce dossier
+(`git log -1 --format=%H -- <dossier>`), **jamais sur une date** : un
+commit rejoué/importé peut porter une date ancienne, un rebase peut
+changer des dates sans changer le contenu.
+
+Le cache (persisté entre runs via `actions/cache`) est invalidé **en
+bloc** (tout est recompilé) si une dépendance partagée change : le paquet
+UPSTI, les scripts `ci-latex-upsti` eux-mêmes, ou tout fichier
+`preamble*.tex`/`*.cls`/`*.sty` du dépôt -- ces fichiers sont inclus par
+plusieurs documents via `\input`, donc invisibles à un `git log` scopé au
+dossier d'un seul document.
+
+En cas de doute (comportement inattendu, dépendance partagée non
+détectée), deux échappatoires :
+- `incremental-build: false` désactive complètement la fonctionnalité.
+- `force-full-rebuild: true` ignore le cache pour CE run sans l'invalider
+  pour les suivants (pratique relié à un `workflow_dispatch` côté dépôt
+  appelant pour forcer un rebuild ponctuel à la demande).
+
 ## Versionnement
 
 Référencer `@main` suit la dernière version du workflow (pratique, mais un
