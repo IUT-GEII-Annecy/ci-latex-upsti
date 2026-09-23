@@ -35,6 +35,30 @@ name: Compile et publie les PDF (workflow réutilisable)
 # automatiquement, aucune déclaration supplémentaire n'est nécessaire
 # côté appelant.
 #
+# Optionnel -- archives de code pour les solutions de TP (voir marqueurs
+# .solution / .solution-prof dans un dossier de TP, indépendants d'un
+# corrigé PDF, scripts/gen_index.py) : renseigner l'input solutions-repo
+# (ex. "IUT-GEII-Annecy/solutions"). Si ce dépôt est privé, fournir aussi
+# le secret SOLUTIONS_DEPLOY_KEY (même mécanisme que UPSTI_DEPLOY_KEY) ;
+# s'il est public, ce secret n'est pas nécessaire. Sans solutions-repo, la
+# fonctionnalité est simplement inactive. La solution est proposée comme
+# commande "wget" à copier (voir marqueur .squelette ci-dessous), pas
+# comme lien de téléchargement -- nécessite site-base-url (calculé
+# automatiquement par défaut, voir cet input plus bas).
+#
+# Optionnel -- commande wget du squelette de TP (marqueur .squelette
+# contenant l'URL complète à télécharger, scripts/build_pdfs.sh) :
+# n'importe quel dossier peut le déposer, aucun input requis. Affiche un
+# bouton "copier la commande" à côté de "Sujet", toujours public.
+#
+# Optionnel -- aperçu enseignant des corrections/solutions (marqueurs
+# .corrige-prof / .solution-prof, voir scripts/build_pdfs.sh et
+# scripts/gen_index.py) : ne nécessite aucun input/secret, toujours actif.
+# Publie une page à part, non listée et non indexable (_site/prof-preview/,
+# meta robots + robots.txt), jamais liée depuis la page publique -- ce
+# n'est PAS un vrai contrôle d'accès, juste un lien à ne pas partager aux
+# étudiants.
+#
 # Prérequis GitHub une fois par dépôt appelant :
 #   - Settings > Pages > Source = "GitHub Actions"
 #   - Le package ghcr.io/iut-geii-annecy/texlive-upsti doit autoriser ce
@@ -84,10 +108,25 @@ on:
         description: "Réf (branche/tag/sha) de ce dépôt à checkouter pour récupérer les scripts -- utile pour figer une version au lieu de @main"
         type: string
         default: main
+      enable-tp-downloads:
+        description: "Active les scripts de démarrage/solutions de TP en commande à copier (voir marqueurs script_demarrage, .solution, .solution-prof). Spécifique aux dépôts dont les étudiants travaillent en IDE cs50 (ex. supports-informatique) -- désactivé par défaut pour tous les autres dépôts partageant ce workflow."
+        type: boolean
+        default: false
+      solutions-repo:
+        description: "Dépôt GitHub (org/repo) contenant les archives de code des solutions de TP (voir marqueurs .solution/.solution-prof). Vide = fonctionnalité désactivée. Sans effet si enable-tp-downloads est false."
+        type: string
+        default: ""
+      site-base-url:
+        description: "URL publique de base du site (sans / final), nécessaire pour générer une commande wget absolue pour la solution de TP. Vide = calculée automatiquement (https://<owner>.github.io/<repo>) ; à renseigner explicitement seulement avec un domaine personnalisé (CNAME)."
+        type: string
+        default: ""
     secrets:
       UPSTI_DEPLOY_KEY:
         description: "Clé de déploiement (lecture) vers le dépôt privé GeoffreyV/UPSTI"
         required: true
+      SOLUTIONS_DEPLOY_KEY:
+        description: "Clé de déploiement (lecture) vers solutions-repo, si ce dépôt est privé. Inutile si solutions-repo est vide ou public."
+        required: false
 
 permissions:
   contents: read
@@ -171,6 +210,18 @@ jobs:
           ref: ${{ inputs.ci-repo-ref }}
           path: _ci-common
 
+      - name: Checkout du dépôt solutions (optionnel)
+        # N'a lieu que si enable-tp-downloads est actif ET solutions-repo
+        # renseigné (voir marqueurs .solution/.solution-prof dans
+        # scripts/build_pdfs.sh) ; sans ce step, le dossier _solutions-src
+        # n'existe pas et la fonctionnalité est ignorée.
+        if: ${{ inputs.enable-tp-downloads && inputs.solutions-repo != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.solutions-repo }}
+          ssh-key: ${{ secrets.SOLUTIONS_DEPLOY_KEY }}
+          path: _solutions-src
+
       - name: Compiler les documents publiables
         env:
           CI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
@@ -178,6 +229,9 @@ jobs:
           SITE_SUBTITLE: ${{ inputs.site-subtitle }}
           GROUP_LABEL: ${{ inputs.group-label }}
           CLASSIFY_MODE: ${{ inputs.classify-mode }}
+          ENABLE_TP_DOWNLOADS: ${{ inputs.enable-tp-downloads }}
+          SOLUTIONS_SRC: _solutions-src
+          SITE_BASE_URL: ${{ inputs.site-base-url != '' && inputs.site-base-url || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
         run: bash _ci-common/scripts/build_pdfs.sh "${{ inputs.site-dir }}"
 
       - name: Upload de l'artefact Pages

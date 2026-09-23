@@ -25,6 +25,25 @@ OUT_DIR="${1:-_site}"
 FAILED=()
 BUILT=()
 CORRIGES=()
+PROF_CORRIGES=()
+SOLUTIONS=()
+PROF_SOLUTIONS=()
+DEMARRAGE_SCRIPTS=()
+
+# Dossier où le dépôt "solutions" (archives de code pour les solutions de
+# TP) a été checkouté par le workflow appelant, s'il l'a été -- voir
+# marqueur .solution plus bas. Absent (dossier inexistant) = fonctionnalité
+# simplement ignorée, aucune erreur.
+SOLUTIONS_SRC="${SOLUTIONS_SRC:-_solutions-src}"
+
+# La fonctionnalité "script de démarrage / solution de TP en commande à
+# copier" est spécifique à certains dépôts (ex. supports-informatique,
+# étudiants en IDE cs50) : ce script étant commun à tous les dépôts de
+# supports UPSTI, elle reste désactivée par défaut et n'agit que si le
+# dépôt appelant l'active explicitement (input enable-tp-downloads du
+# workflow réutilisable). Désactivée : les marqueurs script_demarrage/
+# .solution/.solution-prof sont ignorés même s'ils sont présents.
+ENABLE_TP_DOWNLOADS="${ENABLE_TP_DOWNLOADS:-false}"
 
 # Métadonnées des documents compilés avec succès, une ligne TSV par
 # document : type \t seqnum \t numnum \t doc \t dir \t base
@@ -106,7 +125,12 @@ for doc in "${DOCS[@]}"; do
       *QCM) type="QCM" ;;
     esac
 
-    COMPILED_META+=("$type"$'\t'"$seqnum"$'\t'"$numnum"$'\t'"$doc"$'\t'"$dir"$'\t'"$base")
+    # Séparateur \x1f (Unit Separator) plutôt que tab : seqnum/numnum
+    # peuvent être vides (document sans \sequence ou \UPSTInumero), et
+    # `IFS=$'\t' read` collapse silencieusement les champs vides
+    # consécutifs (tab reste une "IFS white space" pour bash même seul
+    # dans IFS) -- \x1f n'a pas ce problème.
+    COMPILED_META+=("$type"$'\x1f'"$seqnum"$'\x1f'"$numnum"$'\x1f'"$doc"$'\x1f'"$dir"$'\x1f'"$base")
     echo "OK"
   else
     FAILED+=("$doc")
@@ -133,7 +157,7 @@ if [ "${#COMPILED_META[@]}" -gt 0 ]; then
 import sys
 from collections import defaultdict
 
-rows = [line.rstrip("\n").split("\t") for line in sys.stdin]
+rows = [line.rstrip("\n").split("\x1f") for line in sys.stdin]
 groups = defaultdict(list)
 for i, row in enumerate(rows):
     type_, seqnum = row[0], row[1]
@@ -160,12 +184,12 @@ for s in suffix:
 PYEOF
   )
   mapfile -t SUFFIXES < <(
-    printf '%s\n' "${COMPILED_META[@]}" | cut -f1-3 | python3 -c "$PY_ASSIGN_SUFFIXES"
+    printf '%s\n' "${COMPILED_META[@]}" | cut -d $'\x1f' -f1-3 | python3 -c "$PY_ASSIGN_SUFFIXES"
   )
 fi
 
 for i in "${!COMPILED_META[@]}"; do
-  IFS=$'\t' read -r type seqnum numnum doc dir base <<< "${COMPILED_META[$i]}"
+  IFS=$'\x1f' read -r type seqnum numnum doc dir base <<< "${COMPILED_META[$i]}"
   suffix="${SUFFIXES[$i]:-}"
   pdf_path="$dir/$base.pdf"
   dest="$OUT_DIR/$dir"
@@ -184,8 +208,8 @@ for i in "${!COMPILED_META[@]}"; do
   BUILT+=("$doc"$'\t'"$dir/$out_name")
   echo "Publié : $doc -> $dir/$out_name"
 
-  # Correction : publiée uniquement si un marqueur .corrige a été déposé
-  # dans le dossier du document (git add .corrige && git commit && git push).
+  # Correction publique : publiée si un marqueur .corrige a été déposé dans
+  # le dossier du document (git add .corrige && git commit && git push).
   # Utilise le mécanisme UPSTI \ChoixDeVersion{P} (voir docs UPSTI), injecté
   # sans modifier le document original.
   if [ -f "$dir/.corrige" ]; then
@@ -209,6 +233,89 @@ for i in "${!COMPILED_META[@]}"; do
 
     # Nettoyage : le wrapper est un artefact de build, jamais commité.
     rm -f "$wrapper" "$dir/${base}__corrige."{aux,log,out,fdb_latexmk,fls,synctex.gz,pdf}
+
+  # Aperçu enseignant : marqueur .corrige-prof, ignoré si .corrige est déjà
+  # présent (le document est alors déjà public, l'aperçu n'a plus lieu
+  # d'être). Compile et publie la correction comme ci-dessus, mais
+  # gen_index.py ne la lie JAMAIS depuis la page publique : elle n'apparaît
+  # que sur _site/prof-preview/index.html, une page à part non référencée
+  # (voir docstring de gen_index.py -- ce n'est pas un vrai contrôle
+  # d'accès, seulement un lien non répertorié).
+  elif [ -f "$dir/.corrige-prof" ]; then
+    echo "  → marqueur .corrige-prof trouvé (aperçu enseignant), compilation"
+    wrapper="$dir/${base}__corrige.tex"
+    printf '\\def\\ChoixDeVersion{P}\n\\input{%s.tex}\n' "$base" > "$wrapper"
+
+    ( cd "$dir" && latexmk -pdf -interaction=nonstopmode -f -g "${base}__corrige.tex" ) \
+      > "/tmp/build_${base}__corrige_prof.log" 2>&1
+
+    corrige_pdf="$dir/${base}__corrige.pdf"
+    if [ -f "$corrige_pdf" ]; then
+      corrige_prof_out_name="${out_base}__corrige_prof.pdf"
+      cp "$corrige_pdf" "$dest/$corrige_prof_out_name"
+      PROF_CORRIGES+=("$doc"$'\t'"$dir/$corrige_prof_out_name")
+      echo "  → corrigé (aperçu enseignant) OK"
+    else
+      echo "  → ÉCHEC corrigé aperçu (voir /tmp/build_${base}__corrige_prof.log)"
+      tail -n 30 "/tmp/build_${base}__corrige_prof.log"
+    fi
+
+    rm -f "$wrapper" "$dir/${base}__corrige."{aux,log,out,fdb_latexmk,fls,synctex.gz,pdf}
+  fi
+
+  if [ "$ENABLE_TP_DOWNLOADS" = "true" ]; then
+    # Solution en code (TP) : marqueurs .solution / .solution-prof
+    # contenant le sous-dossier à zipper dans le dépôt externe "solutions"
+    # (ex: "tp3"). Indépendants de .corrige/.corrige-prof : beaucoup de TP
+    # n'ont pas de corrigé PDF du tout, seulement du code à récupérer.
+    # .solution-prof est ignoré si .solution est déjà présent (même
+    # logique que .corrige-prof).
+    if [ -f "$dir/.solution" ] && [ -d "$SOLUTIONS_SRC" ]; then
+      sol_subpath=$(tr -d '[:space:]' < "$dir/.solution")
+      sol_dir="$SOLUTIONS_SRC/$sol_subpath"
+      if [ -z "$sol_subpath" ] || [ ! -d "$sol_dir" ]; then
+        echo "  → .solution pointe vers '$sol_subpath', introuvable dans $SOLUTIONS_SRC (ignoré)"
+      else
+        zip_out_name="${out_base}_solution.zip"
+        python3 -c "
+import shutil, sys
+base = sys.argv[1].removesuffix('.zip')
+shutil.make_archive(base, 'zip', sys.argv[2])
+" "$dest/$zip_out_name" "$sol_dir"
+        SOLUTIONS+=("$doc"$'\t'"$dir/$zip_out_name")
+        echo "  → archive solution (publique) : $sol_subpath -> $dir/$zip_out_name"
+      fi
+    elif [ -f "$dir/.solution-prof" ] && [ -d "$SOLUTIONS_SRC" ]; then
+      sol_subpath=$(tr -d '[:space:]' < "$dir/.solution-prof")
+      sol_dir="$SOLUTIONS_SRC/$sol_subpath"
+      if [ -z "$sol_subpath" ] || [ ! -d "$sol_dir" ]; then
+        echo "  → .solution-prof pointe vers '$sol_subpath', introuvable dans $SOLUTIONS_SRC (ignoré)"
+      else
+        zip_out_name="${out_base}_solution_prof.zip"
+        python3 -c "
+import shutil, sys
+base = sys.argv[1].removesuffix('.zip')
+shutil.make_archive(base, 'zip', sys.argv[2])
+" "$dest/$zip_out_name" "$sol_dir"
+        PROF_SOLUTIONS+=("$doc"$'\t'"$dir/$zip_out_name")
+        echo "  → archive solution (aperçu enseignant) : $sol_subpath -> $dir/$zip_out_name"
+      fi
+    fi
+
+    # Script de démarrage (TP) : fichier "script_demarrage" présent tel
+    # quel dans le dossier du document (écrit par l'enseignant -- pas
+    # généré ici : il sait lui-même récupérer/décompresser le bon
+    # squelette). Publié tel quel à côté du PDF ; la commande copiée
+    # (voir gen_index.py) le télécharge PUIS le "source" (pas un simple
+    # `bash script`) pour que ses `cd` persistent dans le terminal de
+    # l'étudiant -- un script lancé en sous-shell ne peut pas changer le
+    # répertoire courant du shell parent. Toujours public : c'est le
+    # point de départ de l'exercice, pas une correction.
+    if [ -f "$dir/script_demarrage" ]; then
+      cp "$dir/script_demarrage" "$dest/script_demarrage"
+      DEMARRAGE_SCRIPTS+=("$doc"$'\t'"$dir/script_demarrage")
+      echo "  → script de démarrage publié : $dir/script_demarrage"
+    fi
   fi
 done
 
@@ -220,11 +327,22 @@ for f in "${FAILED[@]:-}"; do
 done
 
 echo "Corrigés publiés : ${#CORRIGES[@]}"
+echo "Corrigés en aperçu enseignant : ${#PROF_CORRIGES[@]}"
+echo "Solutions publiées : ${#SOLUTIONS[@]}"
+echo "Solutions en aperçu enseignant : ${#PROF_SOLUTIONS[@]}"
+echo "Scripts de démarrage publiés : ${#DEMARRAGE_SCRIPTS[@]}"
 
 # Génère l'index HTML du site (script commun, voir gen_index.py dans ce
 # même dossier -- paramétré par SITE_TITLE/SITE_SUBTITLE/GROUP_LABEL/
 # CLASSIFY_MODE, transmis en variables d'environnement par le workflow).
-python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" "${BUILT[@]:-}" -- "${FAILED[@]:-}" -- "${CORRIGES[@]:-}"
+python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
+  --built "${BUILT[@]:-}" \
+  --failed "${FAILED[@]:-}" \
+  --corriges "${CORRIGES[@]:-}" \
+  --prof-corriges "${PROF_CORRIGES[@]:-}" \
+  --solutions "${SOLUTIONS[@]:-}" \
+  --prof-solutions "${PROF_SOLUTIONS[@]:-}" \
+  --demarrage-scripts "${DEMARRAGE_SCRIPTS[@]:-}"
 
 # Code de sortie: on ne fait jamais échouer le job pour un document cassé
 # (best-effort : on publie ce qui compile). On échoue seulement si RIEN
