@@ -145,7 +145,7 @@ jobs:
       image: ${{ inputs.texlive-image }}
     steps:
       - name: Checkout du dépôt appelant
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: ${{ inputs.fetch-depth }}
 
@@ -188,7 +188,7 @@ jobs:
           ]{gitexinfo}" HEAD > .git/gitHeadInfo.gin
 
       - name: Checkout du package LaTeX UPSTI (privé)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: GeoffreyV/UPSTI
           ssh-key: ${{ secrets.UPSTI_DEPLOY_KEY }}
@@ -204,7 +204,7 @@ jobs:
         run: texhash "$HOME/texmf"
 
       - name: Checkout des scripts communs (ci-latex-upsti)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: IUT-GEII-Annecy/ci-latex-upsti
           ref: ${{ inputs.ci-repo-ref }}
@@ -216,7 +216,7 @@ jobs:
         # scripts/build_pdfs.sh) ; sans ce step, le dossier _solutions-src
         # n'existe pas et la fonctionnalité est ignorée.
         if: ${{ inputs.enable-tp-downloads && inputs.solutions-repo != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.solutions-repo }}
           ssh-key: ${{ secrets.SOLUTIONS_DEPLOY_KEY }}
@@ -235,7 +235,7 @@ jobs:
         run: bash _ci-common/scripts/build_pdfs.sh "${{ inputs.site-dir }}"
 
       - name: Upload de l'artefact Pages
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ${{ inputs.site-dir }}
 
@@ -248,4 +248,4 @@ jobs:
     steps:
       - name: Déploiement sur GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
