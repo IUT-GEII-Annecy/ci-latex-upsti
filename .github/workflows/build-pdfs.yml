@@ -109,7 +109,7 @@ on:
         type: string
         default: main
       enable-tp-downloads:
-        description: "Active les scripts de démarrage/solutions de TP en commande à copier (voir marqueurs script_demarrage, .solution, .solution-prof). Spécifique aux dépôts dont les étudiants travaillent en IDE cs50 (ex. supports-informatique) -- désactivé par défaut pour tous les autres dépôts partageant ce workflow."
+        description: "Active les scripts de démarrage/solutions de TP en commande à copier (voir marqueurs .squelette, .solution, .solution-prof). Spécifique aux dépôts dont les étudiants travaillent en IDE cs50 (ex. supports-informatique) -- désactivé par défaut pour tous les autres dépôts partageant ce workflow."
         type: boolean
         default: false
       solutions-repo:

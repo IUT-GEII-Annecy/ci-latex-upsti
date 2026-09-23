@@ -28,11 +28,14 @@ Usage:
     --prof-corriges "doc3.tex<TAB>corrige_prof_rel3.pdf" ...
     --solutions "doc1.tex<TAB>solution_rel1.zip" ...
     --prof-solutions "doc3.tex<TAB>solution_prof_rel3.zip" ...
-    --demarrage-scripts "doc1.tex<TAB>script_demarrage_rel1" ...
+    --squelette-urls "doc1.tex<TAB>https://.../tp1.zip" ...
 
-Chaque entrée est "chemin_tex<TAB>chemin_publié_réel" : le nom du fichier
-publié (basé sur \\sequence/le type de document, voir build_pdfs.sh) est
-décidé une seule fois côté bash puis transmis ici, jamais recalculé.
+Chaque entrée --built/--corriges/--prof-corriges/--solutions/--prof-solutions
+est "chemin_tex<TAB>chemin_publié_réel" : le nom du fichier publié (basé
+sur \\sequence/le type de document, voir build_pdfs.sh) est décidé une
+seule fois côté bash puis transmis ici, jamais recalculé.
+--squelette-urls est "chemin_tex<TAB>URL_complète" (voir marqueur
+.squelette) : une URL externe, pas un chemin publié par ce script.
 
 Cette fonctionnalité entière (solutions/scripts de démarrage) n'est active
 que si le dépôt appelant l'a explicitement activée (input
@@ -52,14 +55,15 @@ dépôts de supports UPSTI qui partagent ce script.
   recherche, voir robots.txt généré à côté). Ce n'est pas un vrai contrôle
   d'accès : quiconque devine/trouve l'URL peut la consulter. Ne pas y
   déposer les seuls exemplaires de quoi que ce soit de sensible.
---demarrage-scripts : toujours public (c'est le point de départ de
-  l'exercice, pas une correction) -- publication telle quelle d'un fichier
-  "script_demarrage" déposé par l'enseignant dans le dossier du TP (il
-  sait lui-même récupérer/décompresser le bon squelette). Affiche un
-  bouton "copier la commande" à côté de "Sujet" : la commande télécharge
-  PUIS "source" ce script (pas un simple `bash script`), pour que ses
-  `cd` persistent dans le terminal de l'étudiant -- un script lancé en
-  sous-shell ne peut pas changer le répertoire courant du shell parent.
+--squelette-urls : toujours public (c'est le point de départ de
+  l'exercice, pas une correction) -- affiche un bouton "copier la
+  commande" à côté de "Sujet". La commande télécharge le script de
+  démarrage générique (un seul exemplaire pour tous les TP, voir
+  assets/script_demarrage.sh et build_pdfs.sh) PUIS le "source" (pas un
+  simple `bash script`), avec cette URL en paramètre : le script se
+  charge lui-même de télécharger l'archive, la décompresser, s'y placer
+  et se supprimer -- rien à écrire ni maintenir par TP, juste déclarer
+  son URL via le marqueur .squelette.
 """
 import html
 import os
@@ -86,7 +90,7 @@ SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 
 FLAGS = (
     "--built", "--failed", "--corriges", "--prof-corriges",
-    "--solutions", "--prof-solutions", "--demarrage-scripts",
+    "--solutions", "--prof-solutions", "--squelette-urls",
 )
 
 args = sys.argv[1:]
@@ -113,7 +117,10 @@ corriges = dict(split_pair(a) for a in buckets["--corriges"])
 prof_corriges = dict(split_pair(a) for a in buckets["--prof-corriges"])
 solutions = dict(split_pair(a) for a in buckets["--solutions"])
 prof_solutions = dict(split_pair(a) for a in buckets["--prof-solutions"])
-demarrage_scripts = dict(split_pair(a) for a in buckets["--demarrage-scripts"])
+# Les URLs de squelette ne passent PAS par split_pair : ce sont des URLs
+# externes absolues (jamais de préfixe "./" à retirer), pas des chemins
+# publiés par ce script.
+squelette_urls = dict(a.partition("\t")[::2] for a in buckets["--squelette-urls"])
 
 PDF_ICON = """<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" class="pdf-icon">
 <path d="M6 2h8l4 4v16H6z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
@@ -249,7 +256,7 @@ for doc, rel in built:
         "corrige_prof": prof_corriges.get(doc),
         "solution": solutions.get(doc),
         "solution_prof": prof_solutions.get(doc),
-        "demarrage_script": demarrage_scripts.get(doc),
+        "squelette_url": squelette_urls.get(doc),
     }
     rows[grp][cat].append(entry)
     if entry["corrige_prof"] or entry["solution_prof"]:
@@ -321,15 +328,18 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
         solution_rel = e["solution_prof"] if prof else e["solution"]
 
         demarrage_html = ""
-        if e["demarrage_script"]:
-            # Téléchargé PUIS "source"-é (pas juste exécuté) : un script
-            # lancé `bash script` tourne dans un sous-shell, ses `cd` ne
-            # persistent pas dans le terminal de l'étudiant une fois le
-            # script terminé -- `source` (ou `.`) l'exécute dans le shell
-            # courant, donc son `cd` (vers le dossier décompressé) reste
-            # actif après coup.
-            url = abs_url(e["demarrage_script"])
-            command = f"wget -q {url} -O script_demarrage && source script_demarrage"
+        if e["squelette_url"]:
+            # Le script de démarrage générique (un seul exemplaire publié
+            # pour tout le site, voir assets/script_demarrage.sh) est
+            # téléchargé PUIS "source"-é avec l'URL du squelette de ce TP
+            # en paramètre -- pas juste exécuté : un script lancé `bash
+            # script` tourne dans un sous-shell, ses `cd` ne persistent
+            # pas dans le terminal de l'étudiant une fois terminé, alors
+            # que `source` l'exécute dans le shell courant (le `cd` vers
+            # le dossier décompressé reste actif après coup). Le script
+            # se supprime lui-même en fin d'exécution.
+            script_url = abs_url("script_demarrage.sh")
+            command = f'wget -q {script_url} -O script_demarrage.sh && source script_demarrage.sh "{e["squelette_url"]}"'
             demarrage_html = copy_button_html("wget", command, command)
 
         corrige_html = ""
@@ -399,7 +409,7 @@ def has_wget(source_rows) -> bool:
     démarrage ou solution) quelque part dans ces lignes -- pour n'afficher
     la note explicative que si elle sert à quelque chose."""
     return any(
-        e["demarrage_script"] or e["solution"] or e["solution_prof"]
+        e["squelette_url"] or e["solution"] or e["solution_prof"]
         for grp in source_rows for cat in source_rows[grp] for e in source_rows[grp][cat]
     )
 
@@ -762,7 +772,7 @@ if prof_page_written:
 
 print(
     f"index.html généré ({len(built)} document(s), {len(failed)} échec(s), "
-    f"{len(corriges)} corrigé(s), {len(solutions)} solution(s), {len(demarrage_scripts)} script(s) de démarrage)"
+    f"{len(corriges)} corrigé(s), {len(solutions)} solution(s), {len(squelette_urls)} squelette(s))"
     + (f" + prof-preview/index.html ({len(prof_corriges)} corrigé(s), {len(prof_solutions)} solution(s) en aperçu)"
        if prof_page_written else "")
 )

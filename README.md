@@ -80,14 +80,26 @@ publication conditionnelle décrite ci-dessous ; voir la docstring de
   relire une correction avant de la rendre publique. **Ce n'est pas un
   vrai contrôle d'accès** : n'importe qui connaissant/devinant l'URL peut
   la consulter. Ignoré si `.corrige` est déjà présent.
-Les trois marqueurs suivants (`.solution`, `.solution-prof`,
-`script_demarrage`) ne sont pris en compte que si le dépôt appelant a
+Les trois marqueurs suivants (`.squelette`, `.solution`,
+`.solution-prof`) ne sont pris en compte que si le dépôt appelant a
 activé l'input `enable-tp-downloads` (voir plus bas) : cette fonctionnalité
 est spécifique aux dépôts dont les étudiants travaillent en IDE cs50
 (ex. `supports-informatique`), pas à tous les dépôts partageant ce
 workflow -- désactivée par défaut, présents ou non, ces fichiers sont
 alors ignorés.
 
+- **`.squelette`** : une ligne contenant l'URL complète du squelette de
+  code à télécharger (ex. une release GitHub du dépôt `squelettes`).
+  Affiche un bouton "copier la commande" à côté de "Sujet", toujours
+  public (c'est le point de départ de l'exercice, pas une correction). La
+  commande télécharge un **script de démarrage générique** (un seul
+  exemplaire pour tous les TP, `assets/script_demarrage.sh` dans ce
+  dépôt, publié une fois à la racine du site) puis le `source` (pas un
+  simple `bash script` : un script lancé en sous-shell ne peut pas
+  changer le répertoire courant du terminal de l'étudiant, `source` si)
+  avec cette URL en paramètre. Le script télécharge l'archive, la
+  décompresse, s'y déplace, puis **se supprime lui-même** -- rien à
+  écrire ni maintenir par TP.
 - **`.solution`** : une ligne contenant le sous-dossier (dans le dépôt
   externe configuré via l'input `solutions-repo`, voir plus bas) à
   compresser en `.zip` et publier à côté du document, sous un bouton
@@ -98,13 +110,6 @@ alors ignorés.
 - **`.solution-prof`** : comme `.solution`, mais publiée uniquement sur
   `_site/prof-preview/` (même principe que `.corrige-prof` -- pas un vrai
   contrôle d'accès). Ignoré si `.solution` est déjà présent.
-- **`script_demarrage`** (pas un fichier caché : un vrai script, écrit par
-  l'enseignant, qui sait récupérer/décompresser le bon squelette et s'y
-  déplacer) : publié tel quel à côté du document. Affiche un bouton
-  "copier la commande" à côté de "Sujet", toujours public. La commande
-  copiée télécharge le script PUIS le `source` (pas un simple `bash
-  script`) : un script lancé en sous-shell ne peut pas changer le
-  répertoire courant du terminal de l'étudiant, `source` si.
 
 ### Scripts de démarrage et solutions de TP en commande à copier (optionnel, spécifique cs50)
 

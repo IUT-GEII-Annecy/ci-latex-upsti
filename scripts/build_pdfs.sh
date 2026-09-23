@@ -28,7 +28,7 @@ CORRIGES=()
 PROF_CORRIGES=()
 SOLUTIONS=()
 PROF_SOLUTIONS=()
-DEMARRAGE_SCRIPTS=()
+SQUELETTE_URLS=()
 
 # Dossier où le dépôt "solutions" (archives de code pour les solutions de
 # TP) a été checkouté par le workflow appelant, s'il l'a été -- voir
@@ -41,9 +41,18 @@ SOLUTIONS_SRC="${SOLUTIONS_SRC:-_solutions-src}"
 # étudiants en IDE cs50) : ce script étant commun à tous les dépôts de
 # supports UPSTI, elle reste désactivée par défaut et n'agit que si le
 # dépôt appelant l'active explicitement (input enable-tp-downloads du
-# workflow réutilisable). Désactivée : les marqueurs script_demarrage/
-# .solution/.solution-prof sont ignorés même s'ils sont présents.
+# workflow réutilisable). Désactivée : les marqueurs .squelette/.solution/
+# .solution-prof sont ignorés même s'ils sont présents.
 ENABLE_TP_DOWNLOADS="${ENABLE_TP_DOWNLOADS:-false}"
+
+# Script de démarrage générique (télécharge un squelette, le décompresse,
+# s'y place, se supprime) : un seul exemplaire pour tous les TP, publié
+# une fois à la racine du site -- voir assets/script_demarrage.sh dans ce
+# même dépôt. $0 est le chemin de CE script (scripts/build_pdfs.sh), donc
+# son dossier parent contient toujours assets/ à côté de scripts/, que ce
+# dépôt soit checkouté comme _ci-common (voir build-pdfs.yml) ou appelé
+# directement en local.
+SCRIPT_DEMARRAGE_SRC="$(dirname "$0")/../assets/script_demarrage.sh"
 
 # --- Compilation incrémentale ------------------------------------------
 # Évite de recompiler un document si aucun commit ne l'a touché depuis la
@@ -391,22 +400,34 @@ shutil.make_archive(base, 'zip', sys.argv[2])
       fi
     fi
 
-    # Script de démarrage (TP) : fichier "script_demarrage" présent tel
-    # quel dans le dossier du document (écrit par l'enseignant -- pas
-    # généré ici : il sait lui-même récupérer/décompresser le bon
-    # squelette). Publié tel quel à côté du PDF ; la commande copiée
-    # (voir gen_index.py) le télécharge PUIS le "source" (pas un simple
-    # `bash script`) pour que ses `cd` persistent dans le terminal de
-    # l'étudiant -- un script lancé en sous-shell ne peut pas changer le
-    # répertoire courant du shell parent. Toujours public : c'est le
-    # point de départ de l'exercice, pas une correction.
-    if [ -f "$dir/script_demarrage" ]; then
-      cp "$dir/script_demarrage" "$dest/script_demarrage"
-      DEMARRAGE_SCRIPTS+=("$doc"$'\t'"$dir/script_demarrage")
-      echo "  → script de démarrage publié : $dir/script_demarrage"
+    # Squelette (TP) : marqueur .squelette contenant l'URL complète de
+    # l'archive à télécharger (ex. release GitHub du dépôt "squelettes").
+    # Le script qui télécharge/décompresse/s'y place est générique et
+    # partagé par tous les TP (voir SCRIPT_DEMARRAGE_SRC plus haut,
+    # publié une seule fois après cette boucle) : rien à écrire ni à
+    # maintenir par TP, juste déclarer son URL. Toujours public : c'est
+    # le point de départ de l'exercice, pas une correction.
+    if [ -f "$dir/.squelette" ]; then
+      squelette_url=$(tr -d '[:space:]' < "$dir/.squelette")
+      if [ -n "$squelette_url" ]; then
+        SQUELETTE_URLS+=("$doc"$'\t'"$squelette_url")
+        echo "  → squelette déclaré : $squelette_url"
+      fi
     fi
   fi
 done
+
+# Script de démarrage générique : publié UNE SEULE FOIS à la racine du
+# site (pas par TP, voir SCRIPT_DEMARRAGE_SRC plus haut) dès qu'au moins
+# un TP en a besoin.
+if [ "${#SQUELETTE_URLS[@]}" -gt 0 ]; then
+  if [ -f "$SCRIPT_DEMARRAGE_SRC" ]; then
+    cp "$SCRIPT_DEMARRAGE_SRC" "$OUT_DIR/script_demarrage.sh"
+    echo "Script de démarrage générique publié : $OUT_DIR/script_demarrage.sh"
+  else
+    echo "⚠ Script de démarrage générique introuvable ($SCRIPT_DEMARRAGE_SRC) -- squelettes déclarés mais aucune commande ne pourra être générée."
+  fi
+fi
 
 # Persiste l'empreinte des dépendances partagées pour le run suivant
 # (systématique, que le cache ait servi ou non ce run-ci) -- voir
@@ -425,7 +446,7 @@ echo "Corrigés publiés : ${#CORRIGES[@]}"
 echo "Corrigés en aperçu enseignant : ${#PROF_CORRIGES[@]}"
 echo "Solutions publiées : ${#SOLUTIONS[@]}"
 echo "Solutions en aperçu enseignant : ${#PROF_SOLUTIONS[@]}"
-echo "Scripts de démarrage publiés : ${#DEMARRAGE_SCRIPTS[@]}"
+echo "Squelettes déclarés : ${#SQUELETTE_URLS[@]}"
 
 # Génère l'index HTML du site (script commun, voir gen_index.py dans ce
 # même dossier -- paramétré par SITE_TITLE/SITE_SUBTITLE/GROUP_LABEL/
@@ -437,7 +458,7 @@ python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
   --prof-corriges "${PROF_CORRIGES[@]:-}" \
   --solutions "${SOLUTIONS[@]:-}" \
   --prof-solutions "${PROF_SOLUTIONS[@]:-}" \
-  --demarrage-scripts "${DEMARRAGE_SCRIPTS[@]:-}"
+  --squelette-urls "${SQUELETTE_URLS[@]:-}"
 
 # Code de sortie: on ne fait jamais échouer le job pour un document cassé
 # (best-effort : on publie ce qui compile). On échoue seulement si RIEN
