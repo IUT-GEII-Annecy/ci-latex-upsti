@@ -276,15 +276,21 @@ def cell_html(entries):
     return "<br>".join(parts)
 
 
-def copy_button_html(label, command, tooltip):
+def copy_button_html(label, command, tooltip, variant="corrige"):
     """Bouton "copier la commande" (script de démarrage/solution) : icône +
     libellé court, commande complète visible en bulle au survol/focus
     (voir .d-wrap/.d-popover), copie réellement au clic (voir <script> en
     bas de page) avec confirmation dans une bulle sous le bouton -- pas de
     lien de téléchargement direct, pensé pour un usage en terminal (IDE
-    cs50, où un clic de souris ne sert à rien)."""
+    cs50, où un clic de souris ne sert à rien).
+
+    :param variant: "sujet" (vert, même couleur que le lien Sujet -- utilisé
+      pour le script de démarrage, point de départ de l'exercice) ou
+      "corrige" (rouge, même famille que le lien Corrigé -- utilisé pour la
+      solution). Couleurs définies par .copy-btn-{variant} dans PAGE_STYLE.
+    """
     return f"""<span class="d-wrap" tabindex="0">
-                  <button type="button" class="copy-btn" data-copy="{html.escape(command)}" onclick="uiCopy(this)">
+                  <button type="button" class="copy-btn copy-btn-{variant}" data-copy="{html.escape(command)}" onclick="uiCopy(this)">
                     {COPY_ICON}<span class="label">{html.escape(label)}</span>
                     <span class="copy-callout"></span>
                   </button>
@@ -340,7 +346,7 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
             # se supprime lui-même en fin d'exécution.
             script_url = abs_url("script_demarrage.sh")
             command = f'wget -q {script_url} -O script_demarrage.sh && source script_demarrage.sh "{e["squelette_url"]}"'
-            demarrage_html = copy_button_html("wget", command, command)
+            demarrage_html = copy_button_html("wget", command, command, variant="sujet")
 
         corrige_html = ""
         if corrige_rel:
@@ -621,16 +627,20 @@ PAGE_STYLE = """
   .failed h2 { color: var(--failed-fg); }
   footer { margin-top: 2rem; color: var(--muted); font-size: 0.85em; }
 
-  /* Boutons "copier la commande" (script de démarrage/solution) : toujours en
-     rouge (--corrige), qu'il s'agisse du script de démarrage ou de la solution --
-     même famille visuelle que "Corrigé", pour signifier "va chercher du
-     code" plutôt qu'un simple lien de téléchargement. */
+  /* Boutons "copier la commande" (script de démarrage/solution) : couleur
+     selon .copy-btn-{variant} (voir copy_button_html) -- "sujet" (vert,
+     même couleur que le lien Sujet) pour le script de démarrage, point de
+     départ de l'exercice ; "corrige" (rouge, même famille que "Corrigé")
+     pour la solution. */
   .d-wrap { position: relative; display: inline-flex; }
   .copy-btn {
     border: none; background: none; padding: 0; margin: 0;
-    font-family: inherit; cursor: pointer; color: var(--corrige);
+    font-family: inherit; cursor: pointer;
   }
-  .copy-btn:hover { color: var(--corrige-hover); text-decoration: underline; }
+  .copy-btn-sujet { color: var(--sujet); }
+  .copy-btn-sujet:hover { color: var(--sujet-hover); text-decoration: underline; }
+  .copy-btn-corrige { color: var(--corrige); }
+  .copy-btn-corrige:hover { color: var(--corrige-hover); text-decoration: underline; }
   .d-popover {
     position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
     background: var(--fg); color: var(--bg);
