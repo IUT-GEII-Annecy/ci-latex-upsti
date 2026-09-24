@@ -29,6 +29,7 @@ PROF_CORRIGES=()
 SOLUTIONS=()
 PROF_SOLUTIONS=()
 SQUELETTE_URLS=()
+NEXT_RELEASE_DOCS=()
 
 # Dossier où le dépôt "solutions" (archives de code pour les solutions de
 # TP) a été checkouté par le workflow appelant, s'il l'a été -- voir
@@ -53,6 +54,27 @@ ENABLE_TP_DOWNLOADS="${ENABLE_TP_DOWNLOADS:-false}"
 # dépôt soit checkouté comme _ci-common (voir build-pdfs.yml) ou appelé
 # directement en local.
 SCRIPT_DEMARRAGE_SRC="$(dirname "$0")/../assets/script_demarrage.sh"
+
+# --- Aperçu next-release (prof-preview uniquement) ----------------------
+# Quand une branche next-release existe et modifie le dossier d'un
+# document, sa version à venir est compilée et ajoutée SEULEMENT sur
+# prof-preview, à côté de la version actuelle (publique) qui reste
+# affichée telle quelle -- jamais publiée aux étudiants. Purement
+# opportuniste : sans cette branche (ou désactivé), aucun effet.
+PREVIEW_NEXT_RELEASE="${PREVIEW_NEXT_RELEASE:-true}"
+NEXT_RELEASE_SRC=""
+if [ "$PREVIEW_NEXT_RELEASE" = "true" ]; then
+  if git fetch origin next-release >/tmp/next_release_fetch.log 2>&1 \
+     && git show-ref --verify --quiet refs/remotes/origin/next-release; then
+    if git worktree add --detach _next-release-src origin/next-release \
+         >/tmp/next_release_worktree.log 2>&1; then
+      NEXT_RELEASE_SRC="_next-release-src"
+      echo "→ Branche next-release trouvée : aperçu enseignant activé pour les dossiers modifiés"
+    else
+      echo "⚠ Branche next-release trouvée mais worktree impossible à préparer (voir /tmp/next_release_worktree.log)"
+    fi
+  fi
+fi
 
 # --- Compilation incrémentale ------------------------------------------
 # Évite de recompiler un document si aucun commit ne l'a touché depuis la
@@ -111,11 +133,16 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # Liste des documents racine (contiennent \documentclass), hors exclusions.
+# grep -v '^\./_' : exclut nos propres dossiers de travail internes
+# (_upsti-src, _ci-common, _solutions-src, _next-release-src -- ce dernier
+# est un worktree git, déjà en place à ce stade, dont les .tex seraient
+# sinon compilés en double comme de faux documents racine).
 mapfile -t DOCS < <(
   grep -rl '^\\documentclass' --include='*.tex' . 2>/dev/null \
     | grep -v '\.eval' \
     | grep -v '\.hide' \
     | grep -v '\.old' \
+    | grep -v -E '^\./_' \
     | {
         # Applique les motifs d'exclusion additionnels du dépôt appelant,
         # un grep -v par ligne non vide de CI_EXCLUDE_PATTERNS.
@@ -361,6 +388,32 @@ for i in "${!COMPILED_META[@]}"; do
     rm -f "$wrapper" "$dir/${base}__corrige."{aux,log,out,fdb_latexmk,fls,synctex.gz,pdf}
   fi
 
+  # Aperçu next-release (prof-preview uniquement, voir NEXT_RELEASE_SRC
+  # plus haut) : si next-release modifie ce dossier par rapport à la
+  # version actuellement publiée (HEAD), compile la version à venir et la
+  # publie à côté -- sans jamais remplacer ni cacher la version actuelle,
+  # qui reste BUILT/publiée normalement ci-dessus.
+  if [ -n "$NEXT_RELEASE_SRC" ] && ! git diff --quiet HEAD origin/next-release -- "$dir" 2>/dev/null; then
+    if [ -f "$NEXT_RELEASE_SRC/$doc" ]; then
+      echo "  → next-release modifie ce dossier, compilation de l'aperçu"
+      ( cd "$NEXT_RELEASE_SRC/$dir" && latexmk -pdf -interaction=nonstopmode -f -g "$base.tex" ) \
+        > "/tmp/build_${base}__next_release.log" 2>&1
+
+      next_pdf="$NEXT_RELEASE_SRC/$dir/$base.pdf"
+      if [ -f "$next_pdf" ]; then
+        next_out_name="${out_base}__next_release.pdf"
+        cp "$next_pdf" "$dest/$next_out_name"
+        NEXT_RELEASE_DOCS+=("$doc"$'\t'"$dir/$next_out_name")
+        echo "  → aperçu next-release OK"
+      else
+        echo "  → ÉCHEC aperçu next-release (voir /tmp/build_${base}__next_release.log)"
+        tail -n 30 "/tmp/build_${base}__next_release.log"
+      fi
+    else
+      echo "  → next-release modifie ce dossier mais $doc n'y existe plus/pas (ignoré)"
+    fi
+  fi
+
   if [ "$ENABLE_TP_DOWNLOADS" = "true" ]; then
     # Solution en code (TP) : marqueurs .solution / .solution-prof
     # contenant le sous-dossier à zipper dans le dépôt externe "solutions"
@@ -429,6 +482,13 @@ if [ "${#SQUELETTE_URLS[@]}" -gt 0 ]; then
   fi
 fi
 
+# Nettoyage du worktree next-release (l'exécuteur est de toute façon
+# éphémère, mais évite un avertissement "already exists" si le job
+# réutilisait le même espace de travail).
+if [ -n "$NEXT_RELEASE_SRC" ]; then
+  git worktree remove --force "$NEXT_RELEASE_SRC" 2>/dev/null || true
+fi
+
 # Persiste l'empreinte des dépendances partagées pour le run suivant
 # (systématique, que le cache ait servi ou non ce run-ci) -- voir
 # actions/cache dans build-pdfs.yml pour la persistance entre runs.
@@ -447,6 +507,7 @@ echo "Corrigés en aperçu enseignant : ${#PROF_CORRIGES[@]}"
 echo "Solutions publiées : ${#SOLUTIONS[@]}"
 echo "Solutions en aperçu enseignant : ${#PROF_SOLUTIONS[@]}"
 echo "Squelettes déclarés : ${#SQUELETTE_URLS[@]}"
+echo "Aperçus next-release : ${#NEXT_RELEASE_DOCS[@]}"
 
 # Génère l'index HTML du site (script commun, voir gen_index.py dans ce
 # même dossier -- paramétré par SITE_TITLE/SITE_SUBTITLE/GROUP_LABEL/
@@ -458,7 +519,8 @@ python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
   --prof-corriges "${PROF_CORRIGES[@]:-}" \
   --solutions "${SOLUTIONS[@]:-}" \
   --prof-solutions "${PROF_SOLUTIONS[@]:-}" \
-  --squelette-urls "${SQUELETTE_URLS[@]:-}"
+  --squelette-urls "${SQUELETTE_URLS[@]:-}" \
+  --next-release "${NEXT_RELEASE_DOCS[@]:-}"
 
 # Code de sortie: on ne fait jamais échouer le job pour un document cassé
 # (best-effort : on publie ce qui compile). On échoue seulement si RIEN

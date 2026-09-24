@@ -29,11 +29,12 @@ Usage:
     --solutions "doc1.tex<TAB>solution_rel1.zip" ...
     --prof-solutions "doc3.tex<TAB>solution_prof_rel3.zip" ...
     --squelette-urls "doc1.tex<TAB>https://.../tp1.zip" ...
+    --next-release "doc1.tex<TAB>next_release_rel1.pdf" ...
 
-Chaque entrée --built/--corriges/--prof-corriges/--solutions/--prof-solutions
-est "chemin_tex<TAB>chemin_publié_réel" : le nom du fichier publié (basé
-sur \\sequence/le type de document, voir build_pdfs.sh) est décidé une
-seule fois côté bash puis transmis ici, jamais recalculé.
+Chaque entrée --built/--corriges/--prof-corriges/--solutions/--prof-solutions/
+--next-release est "chemin_tex<TAB>chemin_publié_réel" : le nom du fichier
+publié (basé sur \\sequence/le type de document, voir build_pdfs.sh) est
+décidé une seule fois côté bash puis transmis ici, jamais recalculé.
 --squelette-urls est "chemin_tex<TAB>URL_complète" (voir marqueur
 .squelette) : une URL externe, pas un chemin publié par ce script.
 
@@ -64,6 +65,13 @@ dépôts de supports UPSTI qui partagent ce script.
   charge lui-même de télécharger l'archive, la décompresser, s'y placer
   et se supprimer -- rien à écrire ni maintenir par TP, juste déclarer
   son URL via le marqueur .squelette.
+--next-release : indépendant d'enable-tp-downloads, toujours actif tant
+  qu'une branche next-release existe (voir build_pdfs.sh). Quand cette
+  branche modifie le dossier d'un document par rapport à la version
+  publiée, sa version à venir est compilée et ajoutée UNIQUEMENT sur
+  prof-preview, dans un encadré distinct à côté du document -- la version
+  actuelle (celle des étudiants) reste affichée normalement, sur les deux
+  pages, sans changement.
 """
 import html
 import os
@@ -90,7 +98,7 @@ SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 
 FLAGS = (
     "--built", "--failed", "--corriges", "--prof-corriges",
-    "--solutions", "--prof-solutions", "--squelette-urls",
+    "--solutions", "--prof-solutions", "--squelette-urls", "--next-release",
 )
 
 args = sys.argv[1:]
@@ -121,6 +129,7 @@ prof_solutions = dict(split_pair(a) for a in buckets["--prof-solutions"])
 # externes absolues (jamais de préfixe "./" à retirer), pas des chemins
 # publiés par ce script.
 squelette_urls = dict(a.partition("\t")[::2] for a in buckets["--squelette-urls"])
+next_release_docs = dict(split_pair(a) for a in buckets["--next-release"])
 
 PDF_ICON = """<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" class="pdf-icon">
 <path d="M6 2h8l4 4v16H6z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
@@ -136,6 +145,10 @@ CHECK_ICON = """<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="tru
 COPY_ICON = """<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" class="pdf-icon">
 <rect x="7" y="3" width="10" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
 <rect x="5" y="5" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+</svg>"""
+
+EDIT_ICON = """<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" class="pdf-icon">
+<path d="M12 4v16M4 12h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
 </svg>"""
 
 
@@ -258,6 +271,7 @@ for doc, rel in built:
         "solution": solutions.get(doc),
         "solution_prof": prof_solutions.get(doc),
         "squelette_url": squelette_urls.get(doc),
+        "next_release": next_release_docs.get(doc),
     }
     rows[grp][cat].append(entry)
 
@@ -373,13 +387,28 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
                 + copy_button_html(solution_label, f"wget {solution_url}", solution_url)
             )
 
+        # Aperçu next-release (prof-preview uniquement) : badge sur le
+        # titre + lien inline dans .doc-actions, jamais sur la page
+        # publique. La version actuelle (ci-dessus) reste affichée
+        # normalement, inchangée -- ce lien s'ajoute, ne remplace rien.
+        edit_badge_html = ""
+        next_release_html = ""
+        if prof and e["next_release"]:
+            edit_badge_html = ' <span class="doc-edit-badge">EDIT</span>'
+            next_release_html = (
+                f'<span class="sep">·</span>'
+                f'<a class="doc-next" href="{prefix}{html.escape(e["next_release"])}">'
+                f'{EDIT_ICON}<span class="label">Sujet (modifiée pour l\'an prochain)</span></a>'
+            )
+
         items.append(f"""            <li>
-              <p class="doc-title">{html.escape(e["label"])}</p>
+              <p class="doc-title">{html.escape(e["label"])}{edit_badge_html}</p>
               <div class="doc-actions">
                 <a class="doc-sujet" href="{prefix}{html.escape(e["rel"])}"{sujet_title}>{PDF_ICON}<span class="label">Sujet</span></a>
                 {demarrage_html}
                 {corrige_html}
                 {solution_html}
+                {next_release_html}
               </div>
             </li>""")
     items_html = "\n".join(items)
@@ -428,11 +457,11 @@ def has_wget(source_rows) -> bool:
 
 def groups_with_preview(source_rows) -> set:
     """Séquences contenant au moins une entrée en aperçu enseignant
-    (corrige_prof/solution_prof) -- dépliées par défaut sur la page
-    prof-preview pour qu'elles sautent aux yeux."""
+    (corrige_prof/solution_prof/next_release) -- dépliées par défaut sur la
+    page prof-preview pour qu'elles sautent aux yeux."""
     return {
         grp for grp in source_rows for cat in source_rows[grp] for e in source_rows[grp][cat]
-        if e["corrige_prof"] or e["solution_prof"]
+        if e["corrige_prof"] or e["solution_prof"] or e["next_release"]
     }
 
 
@@ -497,6 +526,10 @@ PAGE_STYLE = """
     --sujet-hover: #135c39;
     --corrige: #b3121b;
     --corrige-hover: #7c0c12;
+    --next: #6b4fbb;
+    --next-hover: #513a92;
+    --next-bg: #f1ecfc;
+    --next-border: #d9caf5;
     --ok: #1a7a4c;
     --ok-bg: #e8f5ee;
     --ok-border: #bfe3cf;
@@ -523,6 +556,10 @@ PAGE_STYLE = """
       --sujet-hover: #93e6ba;
       --corrige: #ff8a80;
       --corrige-hover: #ffb3ab;
+      --next: #b6a1f0;
+      --next-hover: #cdbdf7;
+      --next-bg: #241c38;
+      --next-border: #4a3c72;
       --ok: #6cd9a0;
       --ok-bg: #16342650;
       --ok-border: #2d5a41;
@@ -548,6 +585,10 @@ PAGE_STYLE = """
     --sujet-hover: #93e6ba;
     --corrige: #ff8a80;
     --corrige-hover: #ffb3ab;
+    --next: #b6a1f0;
+    --next-hover: #cdbdf7;
+    --next-bg: #241c38;
+    --next-border: #4a3c72;
     --ok: #6cd9a0;
     --ok-bg: #16342650;
     --ok-border: #2d5a41;
@@ -639,6 +680,14 @@ PAGE_STYLE = """
   .doc-sujet:hover { color: var(--sujet-hover); }
   .doc-corrige { color: var(--corrige); }
   .doc-corrige:hover { color: var(--corrige-hover); }
+  .doc-next { color: var(--next); }
+  .doc-next:hover { color: var(--next-hover); }
+  .doc-edit-badge {
+    display: inline-block;
+    font-size: 0.68em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--next); background: var(--next-bg); border: 1px solid var(--next-border);
+    border-radius: 4px; padding: 0.05rem 0.4rem; vertical-align: middle;
+  }
   .sep { color: var(--border); }
   .empty { color: var(--empty); }
   section { margin-bottom: 1.5rem; }

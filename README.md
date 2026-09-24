@@ -156,6 +156,35 @@ détectée), deux échappatoires :
   pour les suivants (pratique relié à un `workflow_dispatch` côté dépôt
   appelant pour forcer un rebuild ponctuel à la demande).
 
+## Aperçu des modifications à venir (branche `next-release`)
+
+Quand une branche `next-release` existe sur le dépôt appelant (même dépôt,
+aucun secret supplémentaire requis) et qu'elle modifie le dossier d'un
+document par rapport à la version publiée (`HEAD`), ce workflow compile
+en plus la version à venir de ce document et l'ajoute **uniquement** sur
+la page prof-preview (`_site/prof-preview/`) : un badge **EDIT** apparaît à
+côté du titre du document, avec un lien "Sujet (modifiée pour l'an
+prochain)". La version actuelle reste affichée normalement, sans aucun
+changement, sur la page publique comme sur la page prof-preview. Sans
+effet si la branche `next-release` n'existe pas.
+
+Activé par défaut (input `preview-next-release`, `true`) ; le désactiver
+avec `preview-next-release: false` si cette fonctionnalité n'est pas
+souhaitée dans un dépôt donné.
+
+```yaml
+jobs:
+  publish:
+    uses: IUT-GEII-Annecy/ci-latex-upsti/.github/workflows/build-pdfs.yml@main
+    with:
+      preview-next-release: false   # défaut: true
+    secrets: inherit
+```
+
+Créer/mettre à jour la branche `next-release` (et y pousser les
+modifications à venir) est une décision de contenu propre à chaque dépôt
+appelant, indépendante de ce workflow.
+
 ## Versionnement
 
 Référencer `@main` suit la dernière version du workflow (pratique, mais un

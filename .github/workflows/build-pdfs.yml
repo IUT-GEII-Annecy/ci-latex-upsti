@@ -132,6 +132,10 @@ on:
         description: "Ignore le cache de compilation incrémentale pour ce run et recompile tout, sans l'invalider pour les runs suivants. À relier à un input workflow_dispatch côté dépôt appelant pour un déclenchement manuel."
         type: boolean
         default: false
+      preview-next-release:
+        description: "Quand une branche next-release existe et modifie le dossier d'un document, compile sa version à venir et l'ajoute sur prof-preview (badge \"EDIT\" + lien \"Sujet (modifiée pour l'an prochain)\"), à côté de la version actuelle qui reste affichée normalement sur les deux pages. N'exige aucun secret (même dépôt) ; sans effet si la branche n'existe pas."
+        type: boolean
+        default: true
     secrets:
       UPSTI_DEPLOY_KEY:
         description: "Clé de déploiement (lecture) vers le dépôt privé GeoffreyV/UPSTI"
@@ -285,6 +289,7 @@ jobs:
           SITE_BASE_URL: ${{ inputs.site-base-url != '' && inputs.site-base-url || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
           INCREMENTAL_BUILD: ${{ inputs.incremental-build }}
           FORCE_FULL_REBUILD: ${{ inputs.force-full-rebuild }}
+          PREVIEW_NEXT_RELEASE: ${{ inputs.preview-next-release }}
           UPSTI_SHA: ${{ env.UPSTI_SHA }}
           CI_COMMON_SHA: ${{ env.CI_COMMON_SHA }}
         run: bash _ci-common/scripts/build_pdfs.sh "${{ inputs.site-dir }}"
