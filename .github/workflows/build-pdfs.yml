@@ -88,6 +88,10 @@ on:
         description: "Motifs grep -E supplémentaires (un par ligne) de chemins à ne jamais publier, en plus de .eval/.hide/.old"
         type: string
         default: ""
+      exam-dir-pattern:
+        description: "Motif grep -E (ex. \"/Evaluations/\") identifiant les dossiers d'évaluation : un document qui matche n'est compilé QUE s'il porte un marqueur .active dans son propre dossier (opt-in explicite -- sans .active, il n'est même pas transformé en PDF, pour qu'aucun contenu sensible, ex. un sujet AMC avec données d'étudiants réels, ne devienne accessible par URL directe). Les documents compilés ainsi ne sont jamais publiés sur la page publique ni prof-preview, uniquement sur une page /exam dédiée (voir .submit50/.exam/.fin_exam). Vide par défaut = fonctionnalité désactivée, comportement inchangé."
+        type: string
+        default: ""
       site-title:
         description: "Titre du site (balise <title> et <h1>)"
         type: string
@@ -280,6 +284,7 @@ jobs:
       - name: Compiler les documents publiables
         env:
           CI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
+          EXAM_DIR_PATTERN: ${{ inputs.exam-dir-pattern }}
           SITE_TITLE: ${{ inputs.site-title }}
           SITE_SUBTITLE: ${{ inputs.site-subtitle }}
           GROUP_LABEL: ${{ inputs.group-label }}

@@ -29,6 +29,7 @@ Usage:
     --solutions "doc1.tex<TAB>solution_rel1.zip" ...
     --prof-solutions "doc3.tex<TAB>solution_prof_rel3.zip" ...
     --squelette-urls "doc1.tex<TAB>https://.../tp1.zip" ...
+    --submit50-cmds "doc1.tex<TAB>submit50 org/exercices/2026/tp1" ...
     --next-release "doc1.tex<TAB>next_release_rel1.pdf" ...
 
 Chaque entrée --built/--corriges/--prof-corriges/--solutions/--prof-solutions/
@@ -37,6 +38,9 @@ publié (basé sur \\sequence/le type de document, voir build_pdfs.sh) est
 décidé une seule fois côté bash puis transmis ici, jamais recalculé.
 --squelette-urls est "chemin_tex<TAB>URL_complète" (voir marqueur
 .squelette) : une URL externe, pas un chemin publié par ce script.
+--submit50-cmds est "chemin_tex<TAB>commande_complète" (voir marqueur
+.submit50) : la commande à afficher telle quelle, pas un chemin ni une
+URL à transformer.
 
 Cette fonctionnalité entière (solutions/scripts de démarrage) n'est active
 que si le dépôt appelant l'a explicitement activée (input
@@ -65,6 +69,11 @@ dépôts de supports UPSTI qui partagent ce script.
   charge lui-même de télécharger l'archive, la décompresser, s'y placer
   et se supprimer -- rien à écrire ni maintenir par TP, juste déclarer
   son URL via le marqueur .squelette.
+--submit50-cmds : toujours public, même esprit que --squelette-urls
+  mais sans templating -- affiche un bouton "copier la commande"
+  distinct (variante de couleur "submit50") juste à côté, avec la
+  commande du marqueur .submit50 recopiée telle quelle (ex. "submit50
+  org/exercices/2026/tp1").
 --next-release : indépendant d'enable-tp-downloads, toujours actif tant
   qu'une branche next-release existe (voir build_pdfs.sh). Quand cette
   branche modifie le dossier d'un document par rapport à la version
@@ -98,7 +107,8 @@ SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 
 FLAGS = (
     "--built", "--failed", "--corriges", "--prof-corriges",
-    "--solutions", "--prof-solutions", "--squelette-urls", "--next-release",
+    "--solutions", "--prof-solutions", "--squelette-urls", "--submit50-cmds",
+    "--exam-docs", "--fin-exam-cmds", "--exam-page-docs", "--next-release",
 )
 
 args = sys.argv[1:]
@@ -129,6 +139,18 @@ prof_solutions = dict(split_pair(a) for a in buckets["--prof-solutions"])
 # externes absolues (jamais de préfixe "./" à retirer), pas des chemins
 # publiés par ce script.
 squelette_urls = dict(a.partition("\t")[::2] for a in buckets["--squelette-urls"])
+# Même remarque que squelette_urls : une commande, pas un chemin -- pas de
+# split_pair (qui retire un préfixe "./" qui n'a pas de sens ici).
+submit50_cmds = dict(a.partition("\t")[::2] for a in buckets["--submit50-cmds"])
+# --exam-docs : simple ensemble de chemins (pas de TAB, pas de valeur
+# associée) -- juste "ce document est en mode évaluation".
+exam_docs = set(buckets["--exam-docs"])
+fin_exam_cmds = dict(a.partition("\t")[::2] for a in buckets["--fin-exam-cmds"])
+# --exam-page-docs : ensemble de chemins de documents à router
+# exclusivement sur la page /exam (voir EXAM_DIR_PATTERN/.active côté
+# build_pdfs.sh) -- distinct de exam_docs (marqueur .exam, qui ne fait
+# que changer le script de démarrage utilisé par le bouton wget).
+exam_page_docs = set(buckets["--exam-page-docs"])
 next_release_docs = dict(split_pair(a) for a in buckets["--next-release"])
 
 PDF_ICON = """<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" class="pdf-icon">
@@ -242,19 +264,35 @@ def version_date(doc_path: str) -> str:
 # quand ils existent -- voir cat_list_html(prof=True) plus bas, pas de
 # structure séparée nécessaire).
 rows = defaultdict(lambda: defaultdict(list))
+# Documents d'évaluation (voir EXAM_DIR_PATTERN/.active côté
+# build_pdfs.sh) : jamais mélangés à `rows` (page publique + prof-preview)
+# -- structure strictement séparée, affichée UNIQUEMENT sur la page /exam
+# dédiée générée plus bas. Un même groupe (ex. "Evaluations") pourrait sinon
+# apparaître sur la page publique dès qu'un document évalué est compilé.
+exam_rows = defaultdict(lambda: defaultdict(list))
 autres = defaultdict(list)
 group_dirs = {}  # grp -> chemin du dossier de regroupement (pour les marqueurs .active/.corrige-prof)
+exam_group_dirs = {}
 
 for doc, rel in built:
     grp = group_of(doc)
-    group_dirs.setdefault(grp, group_dir_of(doc))
-    cat = category_of(doc)
+    # Les dossiers d'évaluation (ex. "EP1_var-boucles-fonctions") ne
+    # suivent pas la convention de préfixe td/tp utilisée par
+    # category_from_folder (mode "folder") : pour un document routé sur la
+    # page /exam, la catégorie se déduit donc toujours de son
+    # \documentclass réel, indépendamment de CLASSIFY_MODE.
+    cat = category_from_documentclass(doc) if doc in exam_page_docs else category_of(doc)
+    if doc in exam_page_docs:
+        exam_group_dirs.setdefault(grp, group_dir_of(doc))
+    else:
+        group_dirs.setdefault(grp, group_dir_of(doc))
     # Le libellé affiché reprend le nom réel du PDF (celui décidé par
     # build_pdfs.sh à partir de \sequence/du type de document), pas le nom
     # du dossier : sinon la page affiche encore l'ancien intitulé alors que
     # le fichier téléchargé, lui, a le bon nom.
     label = Path(rel).stem
     date = version_date(doc)
+    is_exam_page_doc = doc in exam_page_docs
     if cat == "Autre":
         autres[grp].append((label, rel, date))
         continue
@@ -271,9 +309,12 @@ for doc, rel in built:
         "solution": solutions.get(doc),
         "solution_prof": prof_solutions.get(doc),
         "squelette_url": squelette_urls.get(doc),
+        "is_exam": doc in exam_docs,
+        "submit50_cmd": submit50_cmds.get(doc),
+        "fin_exam_cmd": fin_exam_cmds.get(doc),
         "next_release": next_release_docs.get(doc),
     }
-    rows[grp][cat].append(entry)
+    (exam_rows if is_exam_page_doc else rows)[grp][cat].append(entry)
 
 
 def cell_html(entries):
@@ -362,9 +403,29 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
             # que `source` l'exécute dans le shell courant (le `cd` vers
             # le dossier décompressé reste actif après coup). Le script
             # se supprime lui-même en fin d'exécution.
-            script_url = abs_url("script_demarrage.sh")
-            command = f'wget -q {script_url} -O script_demarrage.sh && source script_demarrage.sh "{e["squelette_url"]}"'
+            if e["is_exam"]:
+                script_name = "script_demarrage_exam.sh"
+            else:
+                script_name = "script_demarrage.sh"
+            script_url = abs_url(script_name)
+            command = f'wget -q {script_url} -O {script_name} && source {script_name} "{e["squelette_url"]}"'
             demarrage_html = copy_button_html("wget", command, command, variant="sujet")
+
+        submit50_html = ""
+        if e["submit50_cmd"]:
+            submit50_html = (
+                f'<span class="sep">·</span>'
+                + copy_button_html("submit50", e["submit50_cmd"], e["submit50_cmd"], variant="submit50")
+            )
+
+        fin_exam_html = ""
+        if e["fin_exam_cmd"]:
+            fin_exam_url = abs_url("fin_exam.sh")
+            fin_exam_command = f'wget -q {fin_exam_url} -O fin_exam.sh && source fin_exam.sh "{e["fin_exam_cmd"]}"'
+            fin_exam_html = (
+                f'<span class="sep">·</span>'
+                + copy_button_html("fin_exam", fin_exam_command, fin_exam_command, variant="fin-exam")
+            )
 
         corrige_html = ""
         if corrige_rel:
@@ -408,6 +469,8 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
                 {demarrage_html}
                 {corrige_html}
                 {solution_html}
+                {submit50_html}
+                {fin_exam_html}
                 {next_release_html}
               </div>
             </li>""")
@@ -421,12 +484,16 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
         </div>"""
 
 
-def build_sequence_blocks(source_rows, prefix="", prof=False, force_open_groups=frozenset()):
+def build_sequence_blocks(
+    source_rows, prefix="", prof=False, force_open_groups=frozenset(),
+    group_dirs_map=None, cats=("Cours", "TD", "TP"),
+):
+    group_dirs_map = group_dirs_map if group_dirs_map is not None else group_dirs
     blocks = []
     for grp in sorted(source_rows):
         cats_html = "".join(
             cat_list_html(cat, source_rows[grp].get(cat, []), prefix=prefix, prof=prof)
-            for cat in ("Cours", "TD", "TP")
+            for cat in cats
         )
         # Une séquence s'ouvre par défaut si un marqueur .active a été
         # déposé dans son dossier (git add .active && commit && push),
@@ -434,7 +501,7 @@ def build_sequence_blocks(source_rows, prefix="", prof=False, force_open_groups=
         # prof-preview, si elle contient au moins un aperçu (corrige_prof/
         # solution_prof) : ce qui reste à relire avant publication doit
         # sauter aux yeux sans avoir à tout déplier soi-même.
-        is_active = grp in force_open_groups or Path(group_dirs[grp], ".active").exists()
+        is_active = grp in force_open_groups or Path(group_dirs_map[grp], ".active").exists()
         open_attr = " open" if is_active else ""
         blocks.append(f"""
     <details class="seq"{open_attr}>
@@ -712,6 +779,10 @@ PAGE_STYLE = """
   .copy-btn-sujet:hover { color: var(--sujet-hover); text-decoration: underline; }
   .copy-btn-corrige { color: var(--corrige); }
   .copy-btn-corrige:hover { color: var(--corrige-hover); text-decoration: underline; }
+  .copy-btn-submit50 { color: var(--next); }
+  .copy-btn-submit50:hover { color: var(--next-hover); text-decoration: underline; }
+  .copy-btn-fin-exam { color: var(--corrige); }
+  .copy-btn-fin-exam:hover { color: var(--corrige-hover); text-decoration: underline; }
   .d-popover {
     position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
     background: var(--fg); color: var(--bg);
@@ -845,17 +916,53 @@ if rows:
     (prof_dir / "index.html").write_text(prof_page, encoding="utf-8")
     prof_page_written = True
 
+exam_page_written = False
+if exam_rows:
+    exam_sequence_blocks = build_sequence_blocks(
+        exam_rows, prefix="../", prof=False,
+        force_open_groups=set(exam_rows),
+        group_dirs_map=exam_group_dirs,
+        cats=("Cours", "TD", "TP", "QCM"),
+    )
+    exam_banner = """  <div class="banner">
+    <span aria-hidden="true">🎓</span>
+    <div>
+      <strong>Évaluations en cours</strong>
+      Liste uniquement les évaluations marquées actives (marqueur
+      .active), avec leurs commandes de démarrage et de rendu. Cette page
+      n'est pas un vrai contrôle d'accès : quiconque a le lien peut la
+      consulter -- ne pas le partager, ne pas le publier ailleurs.
+    </div>
+  </div>
+"""
+    exam_page = render_page(
+        f"{SITE_TITLE} — Évaluations",
+        "Évaluations actives : squelette et soumission.",
+        exam_sequence_blocks,
+        banner_html=exam_banner,
+        note_html=wget_note_html,
+        robots="noindex, nofollow",
+    )
+    exam_dir = out_dir / "exam"
+    exam_dir.mkdir(parents=True, exist_ok=True)
+    (exam_dir / "index.html").write_text(exam_page, encoding="utf-8")
+    exam_page_written = True
+
 # robots.txt : ceinture et bretelles en plus du <meta robots> ci-dessus --
 # décourage les crawlers de suivre/indexer l'aperçu enseignant s'il existe,
 # sans jamais le mentionner sur la page publique elle-même.
 robots_txt = "User-agent: *\n"
 if prof_page_written:
     robots_txt += "Disallow: /prof-preview/\n"
+if exam_page_written:
+    robots_txt += "Disallow: /exam/\n"
 (out_dir / "robots.txt").write_text(robots_txt, encoding="utf-8")
 
 print(
     f"index.html généré ({len(built)} document(s), {len(failed)} échec(s), "
-    f"{len(corriges)} corrigé(s), {len(solutions)} solution(s), {len(squelette_urls)} squelette(s))"
+    f"{len(corriges)} corrigé(s), {len(solutions)} solution(s), {len(squelette_urls)} squelette(s), {len(submit50_cmds)} submit50, {len(fin_exam_cmds)} fin_exam)"
     + (f" + prof-preview/index.html ({len(prof_corriges)} corrigé(s), {len(prof_solutions)} solution(s) en aperçu)"
        if prof_page_written else "")
+    + (f" + exam/index.html ({sum(len(v) for cats in exam_rows.values() for v in cats.values())} évaluation(s) active(s))"
+       if exam_page_written else "")
 )

@@ -29,6 +29,9 @@ PROF_CORRIGES=()
 SOLUTIONS=()
 PROF_SOLUTIONS=()
 SQUELETTE_URLS=()
+SUBMIT50_CMDS=()
+EXAM_DOCS=()
+FIN_EXAM_CMDS=()
 NEXT_RELEASE_DOCS=()
 
 # Dossier où le dépôt "solutions" (archives de code pour les solutions de
@@ -54,6 +57,13 @@ ENABLE_TP_DOWNLOADS="${ENABLE_TP_DOWNLOADS:-false}"
 # dépôt soit checkouté comme _ci-common (voir build-pdfs.yml) ou appelé
 # directement en local.
 SCRIPT_DEMARRAGE_SRC="$(dirname "$0")/../assets/script_demarrage.sh"
+# Variante "évaluation" (archive le contenu existant avant de déployer
+# les fichiers de l'épreuve, voir marqueur .exam ci-dessous) et script
+# de fin d'évaluation (submit50 + cache les fichiers + désarchive, voir
+# marqueur .fin_exam) -- publiés uniquement si au moins une évaluation
+# les utilise, comme SCRIPT_DEMARRAGE_SRC.
+SCRIPT_DEMARRAGE_EXAM_SRC="$(dirname "$0")/../assets/script_demarrage_exam.sh"
+FIN_EXAM_SRC="$(dirname "$0")/../assets/fin_exam.sh"
 
 # --- Aperçu next-release (prof-preview uniquement) ----------------------
 # Quand une branche next-release existe et modifie le dossier d'un
@@ -156,7 +166,38 @@ mapfile -t DOCS < <(
     | sort
 )
 
+# Documents d'évaluation (marqueur EXAM_DIR_PATTERN, ex. "/Evaluations/") :
+# jamais publiés sur la page publique ni prof-preview, UNIQUEMENT sur une
+# page /exam dédiée (voir gen_index.py), et SEULEMENT s'ils portent un
+# marqueur .active dans leur propre dossier -- opt-in explicite, pas juste
+# une exclusion d'affichage : un document qui ne matche pas ce motif est
+# traité normalement, un document qui le matche mais n'a pas .active est
+# RETIRÉ DE LA COMPILATION (jamais même transformé en PDF), pour qu'aucun
+# contenu sensible (ex. un sujet AMC avec données d'étudiants réels) ne se
+# retrouve jamais accessible par URL directe sur le site publié, même sans
+# lien depuis une page. Désactivé par défaut (motif vide = tout passe
+# inchangé, comportement strictement identique à avant).
+EXAM_DIR_PATTERN="${EXAM_DIR_PATTERN:-}"
+EXAM_PAGE_DOCS=()
+if [ -n "$EXAM_DIR_PATTERN" ]; then
+  FILTERED_DOCS=()
+  for doc in "${DOCS[@]}"; do
+    if printf '%s' "$doc" | grep -q -E "$EXAM_DIR_PATTERN"; then
+      if [ -f "$(dirname "$doc")/.active" ]; then
+        FILTERED_DOCS+=("$doc")
+        EXAM_PAGE_DOCS+=("$doc")
+      else
+        echo "→ $doc : correspond à EXAM_DIR_PATTERN mais sans .active -- exclu de la compilation"
+      fi
+    else
+      FILTERED_DOCS+=("$doc")
+    fi
+  done
+  DOCS=("${FILTERED_DOCS[@]}")
+fi
+
 echo "→ ${#DOCS[@]} document(s) à compiler"
+echo "→ dont ${#EXAM_PAGE_DOCS[@]} document(s) d'évaluation (page /exam uniquement)"
 
 for doc in "${DOCS[@]}"; do
   [ -z "$doc" ] && continue
@@ -467,6 +508,43 @@ shutil.make_archive(base, 'zip', sys.argv[2])
         echo "  → squelette déclaré : $squelette_url"
       fi
     fi
+
+    # Soumission (TP) : marqueur .submit50 contenant la commande complète
+    # à exécuter en fin d'exercice (ex. "submit50 org/exercices/2026/tp1").
+    # Pas de templating ni de script générique ici (contrairement à
+    # .squelette) : la ligne du marqueur EST la commande affichée telle
+    # quelle. Toujours public, comme .squelette.
+    if [ -f "$dir/.submit50" ]; then
+      submit50_cmd=$(tr -d '\n' < "$dir/.submit50")
+      submit50_cmd=$(echo "$submit50_cmd" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      if [ -n "$submit50_cmd" ]; then
+        SUBMIT50_CMDS+=("$doc"$'\t'"$submit50_cmd")
+        echo "  → submit50 déclaré : $submit50_cmd"
+      fi
+    fi
+
+    # Mode évaluation (marqueur .exam, simple drapeau -- fichier vide ou
+    # non, son contenu n'est pas lu) : le bouton "wget" de .squelette
+    # utilise alors script_demarrage_exam.sh (archive le contenu existant
+    # avant de déployer les fichiers de l'épreuve) au lieu du générique
+    # script_demarrage.sh. Sans effet si .squelette est absent.
+    if [ -f "$dir/.exam" ] && [ -f "$dir/.squelette" ]; then
+      EXAM_DOCS+=("$doc")
+      echo "  → mode évaluation (.exam) activé pour ce squelette"
+    fi
+
+    # Fin d'évaluation : marqueur .fin_exam contenant le slug submit50 à
+    # transmettre à fin_exam.sh (soumet, cache les fichiers de l'épreuve,
+    # restaure ce qui avait été archivé par script_demarrage_exam.sh).
+    # Indépendant de .exam : rien n'empêche de ne déclarer que celui-ci.
+    if [ -f "$dir/.fin_exam" ]; then
+      fin_exam_cmd=$(tr -d '\n' < "$dir/.fin_exam")
+      fin_exam_cmd=$(echo "$fin_exam_cmd" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      if [ -n "$fin_exam_cmd" ]; then
+        FIN_EXAM_CMDS+=("$doc"$'\t'"$fin_exam_cmd")
+        echo "  → fin_exam déclaré : $fin_exam_cmd"
+      fi
+    fi
   fi
 done
 
@@ -479,6 +557,24 @@ if [ "${#SQUELETTE_URLS[@]}" -gt 0 ]; then
     echo "Script de démarrage générique publié : $OUT_DIR/script_demarrage.sh"
   else
     echo "⚠ Script de démarrage générique introuvable ($SCRIPT_DEMARRAGE_SRC) -- squelettes déclarés mais aucune commande ne pourra être générée."
+  fi
+fi
+
+if [ "${#EXAM_DOCS[@]}" -gt 0 ]; then
+  if [ -f "$SCRIPT_DEMARRAGE_EXAM_SRC" ]; then
+    cp "$SCRIPT_DEMARRAGE_EXAM_SRC" "$OUT_DIR/script_demarrage_exam.sh"
+    echo "Script de démarrage (évaluation) publié : $OUT_DIR/script_demarrage_exam.sh"
+  else
+    echo "⚠ Script de démarrage (évaluation) introuvable ($SCRIPT_DEMARRAGE_EXAM_SRC) -- .exam déclaré mais aucune commande ne pourra être générée."
+  fi
+fi
+
+if [ "${#FIN_EXAM_CMDS[@]}" -gt 0 ]; then
+  if [ -f "$FIN_EXAM_SRC" ]; then
+    cp "$FIN_EXAM_SRC" "$OUT_DIR/fin_exam.sh"
+    echo "Script de fin d'évaluation publié : $OUT_DIR/fin_exam.sh"
+  else
+    echo "⚠ Script de fin d'évaluation introuvable ($FIN_EXAM_SRC) -- .fin_exam déclaré mais aucune commande ne pourra être générée."
   fi
 fi
 
@@ -507,6 +603,9 @@ echo "Corrigés en aperçu enseignant : ${#PROF_CORRIGES[@]}"
 echo "Solutions publiées : ${#SOLUTIONS[@]}"
 echo "Solutions en aperçu enseignant : ${#PROF_SOLUTIONS[@]}"
 echo "Squelettes déclarés : ${#SQUELETTE_URLS[@]}"
+echo "Commandes submit50 déclarées : ${#SUBMIT50_CMDS[@]}"
+echo "Évaluations en mode .exam : ${#EXAM_DOCS[@]}"
+echo "Commandes fin_exam déclarées : ${#FIN_EXAM_CMDS[@]}"
 echo "Aperçus next-release : ${#NEXT_RELEASE_DOCS[@]}"
 
 # Génère l'index HTML du site (script commun, voir gen_index.py dans ce
@@ -520,6 +619,10 @@ python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
   --solutions "${SOLUTIONS[@]:-}" \
   --prof-solutions "${PROF_SOLUTIONS[@]:-}" \
   --squelette-urls "${SQUELETTE_URLS[@]:-}" \
+  --submit50-cmds "${SUBMIT50_CMDS[@]:-}" \
+  --exam-docs "${EXAM_DOCS[@]:-}" \
+  --fin-exam-cmds "${FIN_EXAM_CMDS[@]:-}" \
+  --exam-page-docs "${EXAM_PAGE_DOCS[@]:-}" \
   --next-release "${NEXT_RELEASE_DOCS[@]:-}"
 
 # Code de sortie: on ne fait jamais échouer le job pour un document cassé

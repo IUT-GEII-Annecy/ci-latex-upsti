@@ -110,6 +110,59 @@ alors ignorés.
 - **`.solution-prof`** : comme `.solution`, mais publiée uniquement sur
   `_site/prof-preview/` (même principe que `.corrige-prof` -- pas un vrai
   contrôle d'accès). Ignoré si `.solution` est déjà présent.
+- **`.submit50`** : une ligne contenant la commande `submit50` complète à
+  exécuter en fin d'exercice (ex. `submit50 org/exercices/2026/tp1`).
+  Affiche un bouton "copier la commande" à côté de "Sujet", toujours
+  public. Contrairement à `.squelette`, pas de templating ni de script
+  générique : la ligne du marqueur EST la commande affichée telle quelle.
+- **`.exam`** : simple drapeau (fichier vide, son contenu n'est pas lu) à
+  déposer À CÔTÉ d'un `.squelette` existant pour basculer son bouton
+  "wget" en mode évaluation : au lieu du `script_demarrage.sh` générique,
+  la commande générée télécharge et exécute `script_demarrage_exam.sh`,
+  qui met D'ABORD tout le contenu déjà présent dans le dossier courant à
+  l'abri dans un sous-dossier caché `.archive/` avant de déployer les
+  fichiers de l'évaluation -- pour qu'aucun autre TP/correction ne reste
+  visible pendant l'épreuve. Sans effet si `.squelette` est absent.
+- **`.fin_exam`** : une ligne contenant le slug `submit50` (sans le mot
+  `submit50` lui-même, ex. `org/exercices/2026/tp1`) de l'évaluation.
+  Affiche un bouton "copier la commande" distinct qui télécharge et
+  exécute `fin_exam.sh` : celui-ci fait le `submit50`, met à l'abri (dans
+  un dossier caché horodaté si besoin) les fichiers de l'évaluation tels
+  que laissés par l'étudiant, puis restaure le contenu archivé par
+  `script_demarrage_exam.sh`. Indépendant de `.exam` : rien n'empêche de
+  ne déclarer que celui-ci (ex. une évaluation sans téléchargement de
+  squelette particulier).
+
+### Page /exam (optionnelle) : publier des évaluations à part, jamais sur la page publique
+
+Même principe que `prof-preview` (page non listée, non indexable, lien à
+ne pas partager -- voir `meta robots`/`robots.txt`) mais pour les
+évaluations plutôt que les aperçus de correction. Configurer l'input
+`exam-dir-pattern` (motif `grep -E`, ex. `/Evaluations/`) : tout document
+dont le chemin matche ce motif n'est compilé QUE s'il porte un marqueur
+`.active` dans son propre dossier -- sans ce marqueur, il n'est même pas
+transformé en PDF (opt-in explicite, pas une simple exclusion d'affichage :
+aucun risque qu'un sujet sensible, ex. un examen AMC avec données
+d'étudiants réels, se retrouve accessible par URL directe sur le site
+publié sans lien). Les documents ainsi compilés n'apparaissent jamais sur
+la page publique ni sur `prof-preview` : uniquement sur `_site/exam/`,
+avec tous leurs boutons habituels (`.squelette`/`.exam`, `.submit50`,
+`.fin_exam`, corrigé, solution...).
+
+```yaml
+jobs:
+  publish:
+    uses: IUT-GEII-Annecy/ci-latex-upsti/.github/workflows/build-pdfs.yml@main
+    with:
+      exam-dir-pattern: /Evaluations/
+    secrets: inherit
+```
+
+Vide par défaut (fonctionnalité désactivée, comportement inchangé). Pour
+publier une évaluation : déposer `.active` dans son dossier (en plus des
+marqueurs `.squelette`/`.exam`/`.submit50`/`.fin_exam` souhaités) ; pour
+la dépublier en fin d'épreuve, retirer `.active` (le document redevient
+non compilé au prochain build, son PDF précédent n'est pas republié).
 
 ### Scripts de démarrage et solutions de TP en commande à copier (optionnel, spécifique cs50)
 
