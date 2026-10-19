@@ -31,7 +31,7 @@ if [ -e ".archive" ]; then
     return 1 2>/dev/null || exit 1
 fi
 
-echo "→ Mise à l'abri du contenu actuel dans .archive/..."
+echo "→ Mise à l'abri du contenu actuel ..."
 mkdir ".archive"
 for _sde_entry in * ; do
     [ -e "$_sde_entry" ] || continue

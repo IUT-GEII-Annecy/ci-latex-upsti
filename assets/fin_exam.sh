@@ -41,7 +41,7 @@ while [ -e ".${_fe_hide}${_fe_suffix}" ]; do
 done
 _fe_hide=".${_fe_hide}${_fe_suffix}"
 
-echo "→ Mise à l'abri des fichiers de l'évaluation dans $_fe_hide/..."
+echo "→ Mise à l'abri des fichiers de l'évaluation ..."
 mkdir -- "$_fe_hide"
 for _fe_entry in * ; do
     [ -e "$_fe_entry" ] || continue

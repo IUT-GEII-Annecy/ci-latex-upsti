@@ -33,6 +33,7 @@ SUBMIT50_CMDS=()
 EXAM_DOCS=()
 FIN_EXAM_CMDS=()
 NEXT_RELEASE_DOCS=()
+NO_PDF_DOCS=()
 
 # Dossier où le dépôt "solutions" (archives de code pour les solutions de
 # TP) a été checkouté par le workflow appelant, s'il l'a été -- voir
@@ -347,9 +348,24 @@ for i in "${!COMPILED_META[@]}"; do
   fi
   out_name="$out_base.pdf"
 
-  cp "$pdf_path" "$dest/$out_name"
+  # Marqueur .no-pdf : le document apparaît sur la page (titre, bouton(s)
+  # wget squelette/submit50/fin_exam) mais son PDF n'est PAS publié -- ni
+  # copié dans $dest, ni lié. Cas d'usage : une évaluation (page /exam) où
+  # seules les commandes de soumission doivent être visibles, pas l'énoncé
+  # en PDF téléchargeable. "doc" reste dans BUILT (nécessaire : c'est le
+  # seul moyen pour gen_index.py de connaître le titre/la date du
+  # document), mais gen_index.py n'affiche pas le lien "Sujet" pour les
+  # chemins listés dans --no-pdf-docs -- voir sa docstring. rm -f au cas où
+  # un ancien PDF publié traînerait encore d'avant l'ajout du marqueur.
+  if [ -f "$dir/.no-pdf" ]; then
+    rm -f "$dest/$out_name"
+    NO_PDF_DOCS+=("$doc")
+    echo "Publié (sans PDF, .no-pdf) : $doc -> $dir/$out_name"
+  else
+    cp "$pdf_path" "$dest/$out_name"
+    echo "Publié : $doc -> $dir/$out_name"
+  fi
   BUILT+=("$doc"$'\t'"$dir/$out_name")
-  echo "Publié : $doc -> $dir/$out_name"
 
   # Recalculés (loop séparée de la compilation : ni cache_dir ni doc_commit
   # ne survivent d'une itération à l'autre entre les deux boucles).
@@ -607,6 +623,7 @@ echo "Commandes submit50 déclarées : ${#SUBMIT50_CMDS[@]}"
 echo "Évaluations en mode .exam : ${#EXAM_DOCS[@]}"
 echo "Commandes fin_exam déclarées : ${#FIN_EXAM_CMDS[@]}"
 echo "Aperçus next-release : ${#NEXT_RELEASE_DOCS[@]}"
+echo "Documents sans PDF publié (.no-pdf) : ${#NO_PDF_DOCS[@]}"
 
 # Génère l'index HTML du site (script commun, voir gen_index.py dans ce
 # même dossier -- paramétré par SITE_TITLE/SITE_SUBTITLE/GROUP_LABEL/
@@ -623,7 +640,8 @@ python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
   --exam-docs "${EXAM_DOCS[@]:-}" \
   --fin-exam-cmds "${FIN_EXAM_CMDS[@]:-}" \
   --exam-page-docs "${EXAM_PAGE_DOCS[@]:-}" \
-  --next-release "${NEXT_RELEASE_DOCS[@]:-}"
+  --next-release "${NEXT_RELEASE_DOCS[@]:-}" \
+  --no-pdf-docs "${NO_PDF_DOCS[@]:-}"
 
 # Code de sortie: on ne fait jamais échouer le job pour un document cassé
 # (best-effort : on publie ce qui compile). On échoue seulement si RIEN

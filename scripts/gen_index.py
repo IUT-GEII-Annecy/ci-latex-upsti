@@ -81,6 +81,12 @@ dépôts de supports UPSTI qui partagent ce script.
   prof-preview, dans un encadré distinct à côté du document -- la version
   actuelle (celle des étudiants) reste affichée normalement, sur les deux
   pages, sans changement.
+--no-pdf-docs : ensemble de chemins (marqueur .no-pdf, voir build_pdfs.sh)
+  -- le document apparaît normalement (titre, date, boutons squelette/
+  submit50/fin_exam) mais sans lien "Sujet" : son PDF n'est pas publié du
+  tout (ni copié dans _site, ni lien, pas seulement masqué). Pensé pour
+  une évaluation sur la page /exam où seules les commandes de soumission
+  doivent rester visibles, pas l'énoncé en PDF téléchargeable.
 """
 import html
 import os
@@ -109,6 +115,7 @@ FLAGS = (
     "--built", "--failed", "--corriges", "--prof-corriges",
     "--solutions", "--prof-solutions", "--squelette-urls", "--submit50-cmds",
     "--exam-docs", "--fin-exam-cmds", "--exam-page-docs", "--next-release",
+    "--no-pdf-docs",
 )
 
 args = sys.argv[1:]
@@ -152,6 +159,9 @@ fin_exam_cmds = dict(a.partition("\t")[::2] for a in buckets["--fin-exam-cmds"])
 # que changer le script de démarrage utilisé par le bouton wget).
 exam_page_docs = set(buckets["--exam-page-docs"])
 next_release_docs = dict(split_pair(a) for a in buckets["--next-release"])
+# --no-pdf-docs : comme exam_docs, un simple ensemble de chemins (pas de
+# valeur associée) -- voir marqueur .no-pdf côté build_pdfs.sh.
+no_pdf_docs = set(buckets["--no-pdf-docs"])
 
 PDF_ICON = """<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" class="pdf-icon">
 <path d="M6 2h8l4 4v16H6z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
@@ -313,6 +323,7 @@ for doc, rel in built:
         "submit50_cmd": submit50_cmds.get(doc),
         "fin_exam_cmd": fin_exam_cmds.get(doc),
         "next_release": next_release_docs.get(doc),
+        "no_pdf": doc in no_pdf_docs,
     }
     (exam_rows if is_exam_page_doc else rows)[grp][cat].append(entry)
 
@@ -462,10 +473,18 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
                 f'{EDIT_ICON}<span class="label">Sujet (modifiée pour l\'an prochain)</span></a>'
             )
 
+        # .no-pdf (voir build_pdfs.sh) : le PDF n'est pas publié du tout --
+        # pas de lien "Sujet", seulement le titre et les boutons wget
+        # (squelette/submit50/fin_exam) pour cette entrée.
+        sujet_html = (
+            "" if e["no_pdf"] else
+            f'<a class="doc-sujet" href="{prefix}{html.escape(e["rel"])}"{sujet_title}>{PDF_ICON}<span class="label">Sujet</span></a>'
+        )
+
         items.append(f"""            <li>
               <p class="doc-title">{html.escape(e["label"])}{edit_badge_html}</p>
               <div class="doc-actions">
-                <a class="doc-sujet" href="{prefix}{html.escape(e["rel"])}"{sujet_title}>{PDF_ICON}<span class="label">Sujet</span></a>
+                {sujet_html}
                 {demarrage_html}
                 {corrige_html}
                 {solution_html}
@@ -928,10 +947,6 @@ if exam_rows:
     <span aria-hidden="true">🎓</span>
     <div>
       <strong>Évaluations en cours</strong>
-      Liste uniquement les évaluations marquées actives (marqueur
-      .active), avec leurs commandes de démarrage et de rendu. Cette page
-      n'est pas un vrai contrôle d'accès : quiconque a le lien peut la
-      consulter -- ne pas le partager, ne pas le publier ailleurs.
     </div>
   </div>
 """

@@ -132,6 +132,13 @@ alors ignorés.
   `script_demarrage_exam.sh`. Indépendant de `.exam` : rien n'empêche de
   ne déclarer que celui-ci (ex. une évaluation sans téléchargement de
   squelette particulier).
+- **`.no-pdf`** : simple drapeau (fichier vide) -- le document apparaît
+  normalement sur la page (titre, date) avec ses boutons habituels
+  (`.squelette`/`.exam`, `.submit50`, `.fin_exam`), mais **sans lien
+  "Sujet"** : son PDF n'est pas publié du tout (ni copié dans `_site`, ni
+  lien -- pas seulement masqué). Pensé pour une évaluation sur `_site/exam/`
+  où seules les commandes de soumission doivent rester visibles, jamais
+  l'énoncé en PDF téléchargeable.
 
 ### Page /exam (optionnelle) : publier des évaluations à part, jamais sur la page publique
 
