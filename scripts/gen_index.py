@@ -30,6 +30,7 @@ Usage:
     --prof-solutions "doc3.tex<TAB>solution_prof_rel3.zip" ...
     --squelette-urls "doc1.tex<TAB>https://.../tp1.zip" ...
     --submit50-cmds "doc1.tex<TAB>submit50 org/exercices/2026/tp1" ...
+    --check50-cmds "doc1.tex<TAB>01_exo<TAB>check50 org/exercices/2026/tp1-checks/01_exo" ...
     --next-release "doc1.tex<TAB>next_release_rel1.pdf" ...
 
 Chaque entrée --built/--corriges/--prof-corriges/--solutions/--prof-solutions/
@@ -41,6 +42,10 @@ décidé une seule fois côté bash puis transmis ici, jamais recalculé.
 --submit50-cmds est "chemin_tex<TAB>commande_complète" (voir marqueur
 .submit50) : la commande à afficher telle quelle, pas un chemin ni une
 URL à transformer.
+--check50-cmds est "chemin_tex<TAB>libellé<TAB>commande_complète" (voir
+marqueur .check50) : plusieurs entrées possibles par document (une par
+exercice), contrairement aux autres options ci-dessus qui n'en acceptent
+qu'une seule par document -- gen_index.py les regroupe par chemin_tex.
 
 Cette fonctionnalité entière (solutions/scripts de démarrage) n'est active
 que si le dépôt appelant l'a explicitement activée (input
@@ -74,6 +79,17 @@ dépôts de supports UPSTI qui partagent ce script.
   distinct (variante de couleur "submit50") juste à côté, avec la
   commande du marqueur .submit50 recopiée telle quelle (ex. "submit50
   org/exercices/2026/tp1").
+--check50-cmds : toujours public, même esprit que --submit50-cmds mais un
+  bouton par exercice (variante de couleur "check50"), affiché avant le
+  bouton submit50 -- ordre du flux de travail attendu (vérifier chaque
+  exercice, soumettre à la fin). Le slug de check50 doit être dans un
+  chemin distinct de celui de submit50 (jamais un sous-chemin l'un de
+  l'autre) : les deux enregistrent leur résultat comme une branche du
+  dépôt de résultats de l'étudiant nommée d'après le slug, et git refuse
+  qu'une branche et des branches imbriquées sous elle coexistent --
+  convention adoptée ici : .../eval_pratique_1 (submit50) et
+  .../eval_pratique_1-checks/01_exo (check50), pas
+  .../eval_pratique_1/01_exo.
 --next-release : indépendant d'enable-tp-downloads, toujours actif tant
   qu'une branche next-release existe (voir build_pdfs.sh). Quand cette
   branche modifie le dossier d'un document par rapport à la version
@@ -114,6 +130,7 @@ SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 FLAGS = (
     "--built", "--failed", "--corriges", "--prof-corriges",
     "--solutions", "--prof-solutions", "--squelette-urls", "--submit50-cmds",
+    "--check50-cmds",
     "--exam-docs", "--fin-exam-cmds", "--exam-page-docs", "--next-release",
     "--no-pdf-docs",
 )
@@ -149,6 +166,15 @@ squelette_urls = dict(a.partition("\t")[::2] for a in buckets["--squelette-urls"
 # Même remarque que squelette_urls : une commande, pas un chemin -- pas de
 # split_pair (qui retire un préfixe "./" qui n'a pas de sens ici).
 submit50_cmds = dict(a.partition("\t")[::2] for a in buckets["--submit50-cmds"])
+# --check50-cmds : plusieurs commandes par document (une par exercice,
+# contrairement à submit50_cmds) -- "doc<TAB>libellé<TAB>commande", groupées
+# par doc en liste de (libellé, commande) dans l'ordre déclaré.
+check50_cmds = defaultdict(list)
+for a in buckets["--check50-cmds"]:
+    doc, _, reste = a.partition("\t")
+    label, _, cmd = reste.partition("\t")
+    if doc and cmd:
+        check50_cmds[doc].append((label, cmd))
 # --exam-docs : simple ensemble de chemins (pas de TAB, pas de valeur
 # associée) -- juste "ce document est en mode évaluation".
 exam_docs = set(buckets["--exam-docs"])
@@ -321,6 +347,7 @@ for doc, rel in built:
         "squelette_url": squelette_urls.get(doc),
         "is_exam": doc in exam_docs,
         "submit50_cmd": submit50_cmds.get(doc),
+        "check50_cmds": check50_cmds.get(doc, []),
         "fin_exam_cmd": fin_exam_cmds.get(doc),
         "next_release": next_release_docs.get(doc),
         "no_pdf": doc in no_pdf_docs,
@@ -422,6 +449,18 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
             command = f'wget -q {script_url} -O {script_name} && source {script_name} "{e["squelette_url"]}"'
             demarrage_html = copy_button_html("wget", command, command, variant="sujet")
 
+        check50_html = ""
+        if e["check50_cmds"]:
+            # Un bouton par exercice (pas juste un, comme submit50) : voir
+            # le commentaire du marqueur .check50 dans build_pdfs.sh --
+            # chaque exercice d'une épreuve à plusieurs fichiers a son
+            # propre slug de vérification, distinct de celui de soumission.
+            check50_html = "".join(
+                f'<span class="sep">·</span>'
+                + copy_button_html(f"check50 {label}" if label else "check50", cmd, cmd, variant="check50")
+                for label, cmd in e["check50_cmds"]
+            )
+
         submit50_html = ""
         if e["submit50_cmd"]:
             submit50_html = (
@@ -488,6 +527,7 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
                 {demarrage_html}
                 {corrige_html}
                 {solution_html}
+                {check50_html}
                 {submit50_html}
                 {fin_exam_html}
                 {next_release_html}
@@ -616,6 +656,8 @@ PAGE_STYLE = """
     --next-hover: #513a92;
     --next-bg: #f1ecfc;
     --next-border: #d9caf5;
+    --check50: #1565c0;
+    --check50-hover: #0d47a1;
     --ok: #1a7a4c;
     --ok-bg: #e8f5ee;
     --ok-border: #bfe3cf;
@@ -646,6 +688,8 @@ PAGE_STYLE = """
       --next-hover: #cdbdf7;
       --next-bg: #241c38;
       --next-border: #4a3c72;
+      --check50: #7fb3ff;
+      --check50-hover: #a8cdff;
       --ok: #6cd9a0;
       --ok-bg: #16342650;
       --ok-border: #2d5a41;
@@ -675,6 +719,8 @@ PAGE_STYLE = """
     --next-hover: #cdbdf7;
     --next-bg: #241c38;
     --next-border: #4a3c72;
+    --check50: #7fb3ff;
+    --check50-hover: #a8cdff;
     --ok: #6cd9a0;
     --ok-bg: #16342650;
     --ok-border: #2d5a41;
@@ -800,6 +846,8 @@ PAGE_STYLE = """
   .copy-btn-corrige:hover { color: var(--corrige-hover); text-decoration: underline; }
   .copy-btn-submit50 { color: var(--next); }
   .copy-btn-submit50:hover { color: var(--next-hover); text-decoration: underline; }
+  .copy-btn-check50 { color: var(--check50); }
+  .copy-btn-check50:hover { color: var(--check50-hover); text-decoration: underline; }
   .copy-btn-fin-exam { color: var(--corrige); }
   .copy-btn-fin-exam:hover { color: var(--corrige-hover); text-decoration: underline; }
   .d-popover {

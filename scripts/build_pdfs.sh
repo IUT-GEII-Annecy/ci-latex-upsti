@@ -30,6 +30,7 @@ SOLUTIONS=()
 PROF_SOLUTIONS=()
 SQUELETTE_URLS=()
 SUBMIT50_CMDS=()
+CHECK50_CMDS=()
 EXAM_DOCS=()
 FIN_EXAM_CMDS=()
 NEXT_RELEASE_DOCS=()
@@ -539,6 +540,33 @@ shutil.make_archive(base, 'zip', sys.argv[2])
       fi
     fi
 
+    # Vérification par exercice (épreuve à plusieurs fichiers) : marqueur
+    # .check50, une commande "check50 ..." complète par ligne, une par
+    # exercice (contrairement à .submit50, une seule commande pour tout le
+    # document). Le libellé affiché est le dernier segment du slug (ex.
+    # "01_variables" pour ".../eval_pratique_1-checks/01_variables") :
+    # c'est pourquoi les slugs de vérification sont rangés sous un chemin
+    # DISTINCT de celui de soumission (voir eval_pratique_1-checks/ plutôt
+    # que eval_pratique_1/ lui-même dans le dépôt exercices) -- submit50 et
+    # check50 enregistrent chacun leur résultat comme une branche git du
+    # dépôt de résultats de l'étudiant, nommée d'après le slug ; si le
+    # slug check50 d'un exercice était un sous-chemin du slug submit50
+    # (ex. eval_pratique_1/01_variables sous eval_pratique_1), git refuse
+    # d'avoir à la fois une branche à ce chemin et des branches imbriquées
+    # dessous, et le second des deux (check50 ou submit50, selon l'ordre)
+    # échoue systématiquement. Toujours public, comme .submit50.
+    if [ -f "$dir/.check50" ]; then
+      check50_n=0
+      while IFS= read -r check50_cmd || [ -n "$check50_cmd" ]; do
+        check50_cmd=$(echo "$check50_cmd" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        [ -z "$check50_cmd" ] && continue
+        check50_label=$(echo "$check50_cmd" | sed -e 's#.*/##')
+        CHECK50_CMDS+=("$doc"$'\t'"$check50_label"$'\t'"$check50_cmd")
+        check50_n=$((check50_n + 1))
+      done < "$dir/.check50"
+      [ "$check50_n" -gt 0 ] && echo "  → check50 déclaré : $check50_n commande(s)"
+    fi
+
     # Mode évaluation (marqueur .exam, simple drapeau -- fichier vide ou
     # non, son contenu n'est pas lu) : le bouton "wget" de .squelette
     # utilise alors script_demarrage_exam.sh (archive le contenu existant
@@ -620,6 +648,7 @@ echo "Solutions publiées : ${#SOLUTIONS[@]}"
 echo "Solutions en aperçu enseignant : ${#PROF_SOLUTIONS[@]}"
 echo "Squelettes déclarés : ${#SQUELETTE_URLS[@]}"
 echo "Commandes submit50 déclarées : ${#SUBMIT50_CMDS[@]}"
+echo "Commandes check50 déclarées : ${#CHECK50_CMDS[@]}"
 echo "Évaluations en mode .exam : ${#EXAM_DOCS[@]}"
 echo "Commandes fin_exam déclarées : ${#FIN_EXAM_CMDS[@]}"
 echo "Aperçus next-release : ${#NEXT_RELEASE_DOCS[@]}"
@@ -637,6 +666,7 @@ python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
   --prof-solutions "${PROF_SOLUTIONS[@]:-}" \
   --squelette-urls "${SQUELETTE_URLS[@]:-}" \
   --submit50-cmds "${SUBMIT50_CMDS[@]:-}" \
+  --check50-cmds "${CHECK50_CMDS[@]:-}" \
   --exam-docs "${EXAM_DOCS[@]:-}" \
   --fin-exam-cmds "${FIN_EXAM_CMDS[@]:-}" \
   --exam-page-docs "${EXAM_PAGE_DOCS[@]:-}" \
