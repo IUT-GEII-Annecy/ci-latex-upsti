@@ -117,6 +117,7 @@ SITE_SUBTITLE = os.environ.get(
     "SITE_SUBTITLE", "Tous les supports de cours, TD et TP - GEII IUT Annecy"
 )
 GROUP_LABEL = os.environ.get("GROUP_LABEL", "Séquence")
+PROJECTS_GROUP_LABEL = os.environ.get("PROJECTS_GROUP_LABEL", "Projet")
 CLASSIFY_MODE = os.environ.get("CLASSIFY_MODE", "documentclass")
 # URL publique de base du site (ex. "https://iut-geii-annecy.github.io/supports-informatique"),
 # nécessaire pour construire une commande "wget" absolue pour la solution
@@ -132,7 +133,7 @@ FLAGS = (
     "--solutions", "--prof-solutions", "--squelette-urls", "--submit50-cmds",
     "--check50-cmds",
     "--exam-docs", "--fin-exam-cmds", "--exam-page-docs", "--next-release",
-    "--no-pdf-docs",
+    "--no-pdf-docs", "--projects-page-docs",
 )
 
 args = sys.argv[1:]
@@ -184,6 +185,13 @@ fin_exam_cmds = dict(a.partition("\t")[::2] for a in buckets["--fin-exam-cmds"])
 # build_pdfs.sh) -- distinct de exam_docs (marqueur .exam, qui ne fait
 # que changer le script de démarrage utilisé par le bouton wget).
 exam_page_docs = set(buckets["--exam-page-docs"])
+# --projects-page-docs : comme exam_page_docs, un ensemble de chemins à
+# router exclusivement sur une page /projets dédiée -- distinct de
+# exam_page_docs, jamais mélangé (voir PROJECTS_DIR_PATTERN côté
+# build_pdfs.sh). Un sujet de projet n'est pas un contenu sensible, donc
+# aucun gating .active n'est nécessaire côté build_pdfs.sh, contrairement
+# aux documents d'évaluation.
+projects_page_docs = set(buckets["--projects-page-docs"])
 next_release_docs = dict(split_pair(a) for a in buckets["--next-release"])
 # --no-pdf-docs : comme exam_docs, un simple ensemble de chemins (pas de
 # valeur associée) -- voir marqueur .no-pdf côté build_pdfs.sh.
@@ -306,20 +314,48 @@ rows = defaultdict(lambda: defaultdict(list))
 # dédiée générée plus bas. Un même groupe (ex. "Evaluations") pourrait sinon
 # apparaître sur la page publique dès qu'un document évalué est compilé.
 exam_rows = defaultdict(lambda: defaultdict(list))
+# Documents de projet (voir PROJECTS_DIR_PATTERN/gen_index.py --projects-page-docs
+# côté build_pdfs.sh) : comme exam_rows, structure strictement séparée,
+# affichée UNIQUEMENT sur la page /projets dédiée générée plus bas.
+projects_rows = defaultdict(lambda: defaultdict(list))
 autres = defaultdict(list)
 group_dirs = {}  # grp -> chemin du dossier de regroupement (pour les marqueurs .active/.corrige-prof)
 exam_group_dirs = {}
+projects_group_dirs = {}
+
+
+def format_projects_group(grp: str) -> str:
+    """Nom de groupe affiché sur la page /projets : "ProjetN_Nom" (nom de
+    dossier conventionnel, voir 99_Projets) devient "N — Nom" (les deux
+    sont déjà affichés derrière PROJECTS_GROUP_LABEL, ex. "Projet : 1 —
+    Nom") ; un dossier qui ne suit pas cette convention est affiché tel
+    quel, sans erreur."""
+    m = re.match(r"^Projet0*(\d+)[_-]?(.*)$", grp, re.IGNORECASE)
+    if not m:
+        return grp
+    num, nom = m.groups()
+    nom = nom.replace("_", " ").strip()
+    return f"{num} — {nom}" if nom else num
+
 
 for doc, rel in built:
     grp = group_of(doc)
-    # Les dossiers d'évaluation (ex. "EP1_var-boucles-fonctions") ne
-    # suivent pas la convention de préfixe td/tp utilisée par
-    # category_from_folder (mode "folder") : pour un document routé sur la
-    # page /exam, la catégorie se déduit donc toujours de son
-    # \documentclass réel, indépendamment de CLASSIFY_MODE.
-    cat = category_from_documentclass(doc) if doc in exam_page_docs else category_of(doc)
+    # Les dossiers d'évaluation (ex. "EP1_var-boucles-fonctions") et de
+    # projet (ex. "Projet01_421") ne suivent pas la convention de préfixe
+    # td/tp utilisée par category_from_folder (mode "folder") : pour un
+    # document routé sur la page /exam ou /projets, la catégorie se déduit
+    # donc toujours de son \documentclass réel, indépendamment de
+    # CLASSIFY_MODE.
+    is_project_page_doc = doc in projects_page_docs
+    cat = (
+        category_from_documentclass(doc)
+        if (doc in exam_page_docs or is_project_page_doc)
+        else category_of(doc)
+    )
     if doc in exam_page_docs:
         exam_group_dirs.setdefault(grp, group_dir_of(doc))
+    elif is_project_page_doc:
+        projects_group_dirs.setdefault(grp, group_dir_of(doc))
     else:
         group_dirs.setdefault(grp, group_dir_of(doc))
     # Le libellé affiché reprend le nom réel du PDF (celui décidé par
@@ -330,7 +366,13 @@ for doc, rel in built:
     date = version_date(doc)
     is_exam_page_doc = doc in exam_page_docs
     if cat == "Autre":
-        autres[grp].append((label, rel, date))
+        # Un document de projet "Autre" (ex. \documentclass sans option
+        # reconnue) ne doit pas plus fuiter dans "Autres documents" de la
+        # page publique qu'il ne fuiterait dans rows -- seul autres_html de
+        # la page publique existe aujourd'hui, donc on l'ignore plutôt que
+        # de le publier au mauvais endroit.
+        if not is_project_page_doc:
+            autres[grp].append((label, rel, date))
         continue
 
     # La correction (PDF) et la solution de code (indépendante, voir
@@ -352,7 +394,12 @@ for doc, rel in built:
         "next_release": next_release_docs.get(doc),
         "no_pdf": doc in no_pdf_docs,
     }
-    (exam_rows if is_exam_page_doc else rows)[grp][cat].append(entry)
+    if is_exam_page_doc:
+        exam_rows[grp][cat].append(entry)
+    elif is_project_page_doc:
+        projects_rows[grp][cat].append(entry)
+    else:
+        rows[grp][cat].append(entry)
 
 
 def cell_html(entries):
@@ -546,7 +593,15 @@ def cat_list_html(cat_label, entries, prefix="", prof=False):
 def build_sequence_blocks(
     source_rows, prefix="", prof=False, force_open_groups=frozenset(),
     group_dirs_map=None, cats=("Cours", "TD", "TP"),
+    group_label=None, group_name_format=None,
 ):
+    """:param group_label: libellé devant chaque nom de groupe dans le
+      <summary> (défaut GROUP_LABEL -- "Séquence"). :param
+      group_name_format: fonction optionnelle grp -> str pour transformer
+      le nom de groupe affiché (ex. format_projects_group pour /projets),
+      sans toucher à grp lui-même (utilisé tel quel comme clé partout
+      ailleurs -- tri, group_dirs_map, marqueur .active)."""
+    group_label = GROUP_LABEL if group_label is None else group_label
     group_dirs_map = group_dirs_map if group_dirs_map is not None else group_dirs
     blocks = []
     for grp in sorted(source_rows):
@@ -562,9 +617,10 @@ def build_sequence_blocks(
         # sauter aux yeux sans avoir à tout déplier soi-même.
         is_active = grp in force_open_groups or Path(group_dirs_map[grp], ".active").exists()
         open_attr = " open" if is_active else ""
+        grp_display = group_name_format(grp) if group_name_format else grp
         blocks.append(f"""
     <details class="seq"{open_attr}>
-      <summary>{html.escape(GROUP_LABEL)} : {html.escape(grp)}</summary>
+      <summary>{html.escape(group_label)} : {html.escape(grp_display)}</summary>
       <div class="cat-list">{cats_html}
       </div>
     </details>""")
@@ -1011,9 +1067,33 @@ if exam_rows:
     (exam_dir / "index.html").write_text(exam_page, encoding="utf-8")
     exam_page_written = True
 
+projects_page_written = False
+if projects_rows:
+    # Page publique au même titre que la page principale (pas de
+    # meta robots "noindex" ni d'entrée robots.txt, contrairement à /exam
+    # et /prof-preview) : un sujet de projet n'a rien de confidentiel.
+    projects_sequence_blocks = build_sequence_blocks(
+        projects_rows, prefix="../", prof=False,
+        force_open_groups=set(projects_rows),
+        group_dirs_map=projects_group_dirs,
+        group_label=PROJECTS_GROUP_LABEL,
+        group_name_format=format_projects_group,
+    )
+    projects_page = render_page(
+        f"{SITE_TITLE} — Projets",
+        "Un sujet par projet, avec son squelette de code à télécharger.",
+        projects_sequence_blocks,
+        note_html=wget_note_html,
+    )
+    projects_dir = out_dir / "projets"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    (projects_dir / "index.html").write_text(projects_page, encoding="utf-8")
+    projects_page_written = True
+
 # robots.txt : ceinture et bretelles en plus du <meta robots> ci-dessus --
 # décourage les crawlers de suivre/indexer l'aperçu enseignant s'il existe,
-# sans jamais le mentionner sur la page publique elle-même.
+# sans jamais le mentionner sur la page publique elle-même. /projets n'y
+# figure pas : page publique au même titre que la page principale.
 robots_txt = "User-agent: *\n"
 if prof_page_written:
     robots_txt += "Disallow: /prof-preview/\n"
@@ -1028,4 +1108,6 @@ print(
        if prof_page_written else "")
     + (f" + exam/index.html ({sum(len(v) for cats in exam_rows.values() for v in cats.values())} évaluation(s) active(s))"
        if exam_page_written else "")
+    + (f" + projets/index.html ({sum(len(v) for cats in projects_rows.values() for v in cats.values())} projet(s))"
+       if projects_page_written else "")
 )

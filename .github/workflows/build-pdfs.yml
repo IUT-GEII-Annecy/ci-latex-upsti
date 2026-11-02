@@ -92,6 +92,14 @@ on:
         description: "Motif grep -E (ex. \"/Evaluations/\") identifiant les dossiers d'évaluation : un document qui matche n'est compilé QUE s'il porte un marqueur .active dans son propre dossier (opt-in explicite -- sans .active, il n'est même pas transformé en PDF, pour qu'aucun contenu sensible, ex. un sujet AMC avec données d'étudiants réels, ne devienne accessible par URL directe). Les documents compilés ainsi ne sont jamais publiés sur la page publique ni prof-preview, uniquement sur une page /exam dédiée (voir .submit50/.exam/.fin_exam). Vide par défaut = fonctionnalité désactivée, comportement inchangé."
         type: string
         default: ""
+      projects-dir-pattern:
+        description: "Motif grep -E (ex. \"/99_Projets/\") identifiant les dossiers de projet : un document qui matche est compilé normalement (pas de gating .active, contrairement à exam-dir-pattern -- un sujet de projet n'est pas un contenu sensible) mais publié UNIQUEMENT sur une page /projets dédiée (voir scripts/gen_index.py), jamais sur la page publique ni prof-preview. Vide par défaut = fonctionnalité désactivée."
+        type: string
+        default: ""
+      projects-group-label:
+        description: "Intitulé de regroupement affiché sur la page /projets (ex. \"Projet\"), indépendant de group-label qui ne s'applique qu'à la page publique."
+        type: string
+        default: "Projet"
       site-title:
         description: "Titre du site (balise <title> et <h1>)"
         type: string
@@ -285,6 +293,8 @@ jobs:
         env:
           CI_EXCLUDE_PATTERNS: ${{ inputs.exclude-patterns }}
           EXAM_DIR_PATTERN: ${{ inputs.exam-dir-pattern }}
+          PROJECTS_DIR_PATTERN: ${{ inputs.projects-dir-pattern }}
+          PROJECTS_GROUP_LABEL: ${{ inputs.projects-group-label }}
           SITE_TITLE: ${{ inputs.site-title }}
           SITE_SUBTITLE: ${{ inputs.site-subtitle }}
           GROUP_LABEL: ${{ inputs.group-label }}

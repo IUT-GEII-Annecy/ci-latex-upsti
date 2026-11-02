@@ -198,8 +198,25 @@ if [ -n "$EXAM_DIR_PATTERN" ]; then
   DOCS=("${FILTERED_DOCS[@]}")
 fi
 
+# Documents de projet (marqueur PROJECTS_DIR_PATTERN, ex. "/99_Projets/") :
+# jamais publiés sur la page publique ni prof-preview, UNIQUEMENT sur une
+# page /projets dédiée (voir gen_index.py). Contrairement à
+# EXAM_DIR_PATTERN, pas de gating .active : un sujet de projet n'est pas
+# un contenu sensible, donc opt-in par simple emplacement de dossier,
+# toujours compilé normalement (reste dans DOCS).
+PROJECTS_DIR_PATTERN="${PROJECTS_DIR_PATTERN:-}"
+PROJECTS_PAGE_DOCS=()
+if [ -n "$PROJECTS_DIR_PATTERN" ]; then
+  for doc in "${DOCS[@]}"; do
+    if printf '%s' "$doc" | grep -q -E "$PROJECTS_DIR_PATTERN"; then
+      PROJECTS_PAGE_DOCS+=("$doc")
+    fi
+  done
+fi
+
 echo "→ ${#DOCS[@]} document(s) à compiler"
 echo "→ dont ${#EXAM_PAGE_DOCS[@]} document(s) d'évaluation (page /exam uniquement)"
+echo "→ dont ${#PROJECTS_PAGE_DOCS[@]} document(s) de projet (page /projets uniquement)"
 
 for doc in "${DOCS[@]}"; do
   [ -z "$doc" ] && continue
@@ -670,6 +687,7 @@ python3 "$(dirname "$0")/gen_index.py" "$OUT_DIR" \
   --exam-docs "${EXAM_DOCS[@]:-}" \
   --fin-exam-cmds "${FIN_EXAM_CMDS[@]:-}" \
   --exam-page-docs "${EXAM_PAGE_DOCS[@]:-}" \
+  --projects-page-docs "${PROJECTS_PAGE_DOCS[@]:-}" \
   --next-release "${NEXT_RELEASE_DOCS[@]:-}" \
   --no-pdf-docs "${NO_PDF_DOCS[@]:-}"
 
